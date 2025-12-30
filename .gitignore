@@ -28,3 +28,5 @@ data/*.db
 data/*.db-*
 *.sqlite
 *.sqlite-*
+
+FinanceAI/
