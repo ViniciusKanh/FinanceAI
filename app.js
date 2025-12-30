@@ -3,9 +3,11 @@
 // ==========================================================
 // Permite configurar via localStorage:
 // localStorage.setItem("FINANCEAI_API_BASE","http://localhost:8000");
-const API_BASE =
-  (localStorage.getItem("FINANCEAI_API_BASE") || "").trim() ||
-  "http://localhost:8000";
+// localStorage.removeItem("FINANCEAI_API_BASE");
+const DEFAULT_API_BASE = "https://viniciuskhan-financeai.hf.space";
+const API_BASE = (localStorage.getItem("FINANCEAI_API_BASE") || DEFAULT_API_BASE)
+  .trim()
+  .replace(/\/+$/, "");
 
 // ==========================================================
 // ESTADO LOCAL (frontend)
@@ -56,6 +58,8 @@ function showToast(title, msg, ms = 3500) {
   clearTimeout(showToast._t);
   showToast._t = setTimeout(() => box.classList.add("hidden"), ms);
 }
+// Alias (caso você use "toast" em algum lugar)
+window.toast = showToast;
 
 // ==========================================================
 // HELPERS (datas, texto seguro, dinheiro)
@@ -519,10 +523,16 @@ function destroyChart(inst) {
 async function reloadCharts() {
   await Promise.all([renderTimeseriesChart(), renderCategoriesChart()]);
 }
+window.reloadCharts = reloadCharts;
 
 async function renderTimeseriesChart() {
   const el = document.getElementById("chart-timeseries");
   if (!el) return;
+
+  if (typeof Chart === "undefined") {
+    showToast("Charts", "Chart.js não carregou.");
+    return;
+  }
 
   const { year, month } = monthLabel(state.currentDate);
 
@@ -579,6 +589,11 @@ async function renderCategoriesChart() {
   const el = document.getElementById("chart-categories");
   if (!el) return;
 
+  if (typeof Chart === "undefined") {
+    showToast("Charts", "Chart.js não carregou.");
+    return;
+  }
+
   const { year, month } = monthLabel(state.currentDate);
 
   // Categorias por competência: cash expenses (sem pagamento) + card purchases
@@ -604,6 +619,11 @@ async function renderCategoriesChart() {
 function renderCardCategoryChart(purchases) {
   const el = document.getElementById("chart-card-categories");
   if (!el) return;
+
+  if (typeof Chart === "undefined") {
+    showToast("Charts", "Chart.js não carregou.");
+    return;
+  }
 
   const byCat = {};
   (purchases || []).forEach(p => {
@@ -789,6 +809,7 @@ window.handleSaveCategory = async (e) => {
   await refreshAll();
 };
 
+// transação do caixa (novo lançamento)
 const txForm = document.getElementById("transaction-form");
 if (txForm) {
   txForm.onsubmit = async (e) => {
@@ -809,7 +830,8 @@ if (txForm) {
     try {
       await api("/transactions", { method: "POST", body: JSON.stringify(payload) });
       e.target.reset();
-      document.getElementById("tx-date").valueAsDate = new Date();
+      const txDate = document.getElementById("tx-date");
+      if (txDate) txDate.valueAsDate = new Date();
 
       await Promise.all([loadTransactionsForCurrentMonth(), loadCombinedForCurrentMonth()]);
       renderAll();
@@ -824,7 +846,10 @@ if (txForm) {
       console.error(e);
       showToast("Erro", e.message || String(e));
     } finally {
-      if (btn) { btn.innerHTML = prevHtml || '<i class="fas fa-save"></i> Salvar Lançamento'; setDisabled(btn, false); }
+      if (btn) {
+        btn.innerHTML = prevHtml || '<i class="fas fa-save"></i> Salvar Lançamento';
+        setDisabled(btn, false);
+      }
     }
   };
 }
@@ -1074,13 +1099,22 @@ if (chatForm) {
       const node = document.getElementById(loadingId);
       if (node) node.remove();
 
-      const rendered = sanitizeHtml(marked.parse(answer));
-      msgs.innerHTML += `
-        <div class="flex gap-3">
-          <div class="chat-bubble-ai p-4 shadow-sm text-sm text-slate-700 max-w-[90%]">
-            <div class="prose prose-sm max-w-none">${rendered}</div>
-          </div>
-        </div>`;
+      if (typeof marked === "undefined") {
+        msgs.innerHTML += `
+          <div class="flex gap-3">
+            <div class="chat-bubble-ai p-4 shadow-sm text-sm text-slate-700 max-w-[90%]">
+              <pre class="whitespace-pre-wrap">${safeText(answer)}</pre>
+            </div>
+          </div>`;
+      } else {
+        const rendered = sanitizeHtml(marked.parse(answer));
+        msgs.innerHTML += `
+          <div class="flex gap-3">
+            <div class="chat-bubble-ai p-4 shadow-sm text-sm text-slate-700 max-w-[90%]">
+              <div class="prose prose-sm max-w-none">${rendered}</div>
+            </div>
+          </div>`;
+      }
     } catch (err) {
       console.error(err);
       const node = document.getElementById(loadingId);
@@ -1269,7 +1303,10 @@ function generateReportMarkdown(data) {
 }
 
 function reportToHtml(md) {
-  const body = sanitizeHtml(marked.parse(md || ""));
+  const body = (typeof marked === "undefined")
+    ? `<pre style="white-space:pre-wrap">${safeText(md || "")}</pre>`
+    : sanitizeHtml(marked.parse(md || ""));
+
   return `<!doctype html>
 <html lang="pt-br">
 <head>
@@ -1341,7 +1378,13 @@ window.generateAndRenderReport = async () => {
   if (badge) badge.innerText = `${monthNamePt(parsed.month)} ${parsed.year}`;
 
   const prev = document.getElementById("report-preview");
-  if (prev) prev.innerHTML = sanitizeHtml(marked.parse(md));
+  if (!prev) return;
+
+  if (typeof marked === "undefined") {
+    prev.innerHTML = `<pre class="whitespace-pre-wrap">${safeText(md)}</pre>`;
+  } else {
+    prev.innerHTML = sanitizeHtml(marked.parse(md));
+  }
 };
 
 window.downloadReport = async (fmt) => {
@@ -1386,6 +1429,11 @@ async function renderPdfFile(file) {
 
   pages.innerHTML = "";
   if (!file) return;
+
+  if (typeof pdfjsLib === "undefined") {
+    showToast("PDF", "pdf.js não carregou.");
+    return;
+  }
 
   const buf = await file.arrayBuffer();
   const task = pdfjsLib.getDocument({ data: buf });
@@ -1477,4 +1525,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   setActiveNav("dashboard");
   refreshAll();
+
+  // Debug útil (console)
+  console.log("[FinanceAI] API_BASE =", API_BASE);
 });
