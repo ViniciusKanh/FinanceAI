@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinanceAI Pro - Gestão Pessoal</title>
+
+  <!-- Favicon (usa o logo do assets) -->
+  <link rel="icon" type="image/png" href="./assets/logo%202.png" />
+
+  <!-- Bibliotecas Externas -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: "#eff6ff",
+              100: "#dbeafe",
+              500: "#3b82f6",
+              600: "#2563eb",
+              700: "#1d4ed8",
+              900: "#1e3a8a",
+            },
+          },
+        },
+      },
+    };
+  </script>
+
+  <style>
+    body { background-color: #f1f5f9; }
+    .hide-scrollbar::-webkit-scrollbar { display: none; }
+
+    /* Chat */
+    .chat-bubble-user { background-color: #2563eb; color: white; border-radius: 12px 12px 0 12px; }
+    .chat-bubble-ai { background-color: white; color: #334155; border: 1px solid #e2e8f0; border-radius: 12px 12px 12px 0; }
+    .slide-in { animation: slideIn 0.3s ease-out forwards; }
+    @keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+
+    /* Correção: botões do chat “transparentes” */
+    .chat-btn {
+      opacity: 1 !important;
+      background-opacity: 1 !important;
+      -webkit-text-fill-color: unset;
+    }
+  </style>
+</head>
+
+<body class="text-slate-800 h-screen flex overflow-hidden font-sans">
+  <!-- Sidebar (Desktop) -->
+  <aside class="hidden md:flex flex-col w-64 bg-white border-r border-slate-200 h-full z-20 shadow-sm">
+    <div class="p-6 flex items-center gap-3 border-b border-slate-100">
+      <!-- LOGO (substitui o ícone) -->
+<div class="w-10 h-10 rounded-lg bg-white border border-slate-200 flex items-center justify-center shadow-sm overflow-hidden">
+  <img src="./assets/logo%202.png" alt="FinanceAI Logo" class="w-full h-full object-contain p-1" />
+</div>
+
+
+      <div>
+        <h1 class="text-lg font-bold text-slate-800 leading-tight">Finance<span class="text-blue-600">AI</span></h1>
+        <p class="text-[10px] text-slate-400 font-medium">Gestão Pessoal</p>
+      </div>
+    </div>
+
+    <nav class="flex-1 px-4 space-y-2 mt-6">
+      <button onclick="switchView('dashboard')" id="nav-dashboard"
+        class="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg bg-blue-50 text-blue-700 transition-colors border border-blue-100">
+        <i class="fas fa-chart-line w-5"></i> Dashboard
+      </button>
+
+      <button onclick="switchView('credit')" id="nav-credit"
+        class="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg text-slate-600 hover:bg-slate-50 transition-colors">
+        <i class="fas fa-credit-card w-5"></i> Cartão de Crédito
+      </button>
+
+      <button onclick="switchView('settings')" id="nav-settings"
+        class="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg text-slate-600 hover:bg-slate-50 transition-colors">
+        <i class="fas fa-university w-5"></i> Contas & Bancos
+      </button>
+
+      <button onclick="switchView('reports')" id="nav-reports"
+        class="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg text-slate-600 hover:bg-slate-50 transition-colors">
+        <i class="fas fa-file-export w-5"></i> Relatórios
+      </button>
+    </nav>
+
+    <div class="p-4 bg-slate-50 border-t border-slate-200">
+      <button onclick="toggleAIModal()"
+        class="w-full bg-slate-800 hover:bg-slate-900 text-white py-3 px-4 rounded-xl flex items-center justify-center gap-2 shadow-lg transition-transform active:scale-95">
+        <i class="fas fa-robot text-yellow-400"></i>
+        <span class="font-bold text-sm">Assistente IA</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Mobile Tab Bar -->
+  <div class="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 z-50 px-6 py-2 flex justify-between items-center shadow-lg">
+    <button id="mnav-dashboard" onclick="switchView('dashboard')" class="flex flex-col items-center p-2 text-blue-600">
+      <i class="fas fa-home text-xl mb-1"></i>
+      <span class="text-[10px] font-bold">Início</span>
+    </button>
+
+    <button id="mnav-credit" onclick="switchView('credit')" class="flex flex-col items-center p-2 text-slate-400 hover:text-blue-600">
+      <i class="fas fa-credit-card text-xl mb-1"></i>
+      <span class="text-[10px] font-bold">Cartão</span>
+    </button>
+
+    <button onclick="toggleAIModal()"
+      class="flex flex-col items-center justify-center w-14 h-14 bg-slate-900 text-white rounded-full shadow-xl -mt-8 border-4 border-slate-100">
+      <i class="fas fa-robot text-xl text-yellow-400"></i>
+    </button>
+
+    <button id="mnav-settings" onclick="switchView('settings')" class="flex flex-col items-center p-2 text-slate-400 hover:text-blue-600">
+      <i class="fas fa-sliders-h text-xl mb-1"></i>
+      <span class="text-[10px] font-bold">Cadastros</span>
+    </button>
+  </div>
+
+  <!-- Toast (erros/info) -->
+  <div id="toast" class="fixed top-4 right-4 z-[90] hidden">
+    <div id="toast-inner" class="bg-slate-900 text-white px-4 py-3 rounded-xl shadow-2xl text-sm flex items-start gap-3 max-w-[340px]">
+      <i class="fas fa-circle-exclamation mt-0.5 text-amber-300"></i>
+      <div>
+        <p class="font-bold" id="toast-title">Aviso</p>
+        <p class="text-slate-200" id="toast-msg">Mensagem</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <main class="flex-1 overflow-y-auto relative bg-slate-100">
+    <!-- Header Mobile -->
+    <header class="md:hidden flex justify-between items-center p-4 bg-white border-b border-slate-200 sticky top-0 z-30">
+      <div class="flex items-center gap-2">
+        <!-- LOGO (substitui o ícone) -->
+        <img src="./assets/logo%202.png" alt="FinanceAI Logo" class="w-8 h-8 object-contain" />
+<h1 class="text-xl font-bold text-slate-800">FinanceAI</h1>
+
+      </div>
+      <div class="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-bold flex items-center gap-1">
+        <span class="w-2 h-2 bg-green-500 rounded-full"></span> Online
+      </div>
+    </header>
+
+    <!-- VIEW: DASHBOARD -->
+    <div id="view-dashboard" class="p-4 md:p-8 pb-24 md:pb-8 max-w-7xl mx-auto space-y-6">
+      <!-- Date Navigation -->
+      <div class="bg-white rounded-xl p-2 shadow-sm border border-slate-200 flex justify-between items-center max-w-md mx-auto md:mx-0">
+        <button onclick="filterDate('prev')" class="w-10 h-10 flex items-center justify-center text-slate-500 hover:bg-slate-100 rounded-lg transition-colors">
+          <i class="fas fa-chevron-left"></i>
+        </button>
+        <div class="text-center">
+          <span id="current-month-display" class="block font-bold text-slate-800 text-lg">Carregando...</span>
+          <span class="text-[10px] text-slate-400 uppercase tracking-wide">Mês de Referência</span>
+        </div>
+        <button onclick="filterDate('next')" class="w-10 h-10 flex items-center justify-center text-slate-500 hover:bg-slate-100 rounded-lg transition-colors">
+          <i class="fas fa-chevron-right"></i>
+        </button>
+      </div>
+
+      <!-- Dashboard Stats -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden">
+          <div class="relative z-10">
+            <p class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">Saldo Geral</p>
+            <h3 class="text-3xl font-bold tracking-tight" id="total-balance">R$ 0,00</h3>
+            <div class="mt-4 flex gap-4 text-xs font-medium">
+              <span class="text-emerald-400 flex items-center gap-1"><i class="fas fa-arrow-up"></i> <span id="total-income">0,00</span></span>
+              <span class="text-rose-400 flex items-center gap-1"><i class="fas fa-arrow-down"></i> <span id="total-expense">0,00</span></span>
+            </div>
+          </div>
+          <i class="fas fa-wallet absolute right-4 bottom-4 text-6xl text-white opacity-5"></i>
+        </div>
+
+        <div class="md:col-span-2 overflow-x-auto pb-2 hide-scrollbar">
+          <div class="flex gap-4 min-w-full" id="accounts-cards-container">
+            <div class="w-full h-32 flex items-center justify-center text-slate-400 bg-white border border-slate-200 rounded-2xl border-dashed">
+              <span class="text-sm"><i class="fas fa-spinner animate-spin mr-2"></i>Carregando contas...</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Charts -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div class="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          <div class="p-4 border-b border-slate-100 flex items-center justify-between">
+            <div>
+              <h3 class="font-bold text-slate-800">Gráfico Temporal (Dia a Dia)</h3>
+              <p class="text-xs text-slate-400">Receitas vs. Despesas no mês selecionado.</p>
+            </div>
+            <button onclick="reloadCharts()" class="text-xs font-bold text-slate-600 hover:text-blue-600">
+              <i class="fas fa-rotate mr-1"></i> Atualizar
+            </button>
+          </div>
+          <div class="p-4">
+            <canvas id="chart-timeseries" height="110"></canvas>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          <div class="p-4 border-b border-slate-100">
+            <h3 class="font-bold text-slate-800">Gastos por Categoria</h3>
+            <p class="text-xs text-slate-400">Distribuição das despesas no mês.</p>
+          </div>
+          <div class="p-4">
+            <canvas id="chart-categories" height="160"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Transaction Form -->
+        <div class="lg:col-span-1">
+          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div class="p-4 bg-slate-50 border-b border-slate-100 flex items-center gap-2">
+              <div class="bg-blue-500 text-white w-6 h-6 rounded-full flex items-center justify-center text-xs"><i class="fas fa-plus"></i></div>
+              <h3 class="font-bold text-slate-800">Novo Lançamento</h3>
+            </div>
+
+            <form id="transaction-form" class="p-5 space-y-4">
+              <div class="grid grid-cols-2 gap-1 bg-slate-100 p-1 rounded-xl">
+                <button type="button" onclick="setTxType('expense')" id="btn-expense"
+                  class="py-2.5 text-sm font-bold rounded-lg shadow-sm bg-white text-rose-600 transition-all">Despesa</button>
+                <button type="button" onclick="setTxType('income')" id="btn-income"
+                  class="py-2.5 text-sm font-bold rounded-lg text-slate-500 hover:text-emerald-600 transition-all">Receita</button>
+              </div>
+              <input type="hidden" id="tx-type" value="expense" />
+
+              <div>
+                <label class="text-xs font-bold text-slate-500 uppercase ml-1">Valor</label>
+                <div class="relative mt-1">
+                  <span class="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold">R$</span>
+                  <input type="number" step="0.01" id="tx-amount"
+                    class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none font-bold text-lg text-slate-700"
+                    placeholder="0,00" required />
+                </div>
+              </div>
+
+              <div>
+                <label class="text-xs font-bold text-slate-500 uppercase ml-1">Descrição</label>
+                <input type="text" id="tx-desc"
+                  class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                  placeholder="Ex: Mercado" required />
+              </div>
+
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="text-xs font-bold text-slate-500 uppercase ml-1">Conta</label>
+                  <select id="tx-account"
+                    class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm appearance-none bg-white cursor-pointer">
+                    <option>Carregando...</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="text-xs font-bold text-slate-500 uppercase ml-1">Categoria</label>
+                  <select id="tx-category"
+                    class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm appearance-none bg-white cursor-pointer">
+                    <option>Carregando...</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label class="text-xs font-bold text-slate-500 uppercase ml-1">Data</label>
+                <input type="date" id="tx-date"
+                  class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm text-slate-600 bg-white" />
+              </div>
+
+              <button type="submit"
+                class="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg shadow-blue-200 transition-all active:scale-95 flex items-center justify-center gap-2 mt-2">
+                <i class="fas fa-save"></i> Salvar Lançamento
+              </button>
+            </form>
+          </div>
+        </div>
+
+        <!-- Transaction List -->
+        <div class="lg:col-span-2">
+          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 min-h-[500px] flex flex-col">
+            <div class="p-4 border-b border-slate-100 flex justify-between items-center">
+              <h3 class="font-bold text-slate-800">Extrato do Mês</h3>
+              <span class="text-xs bg-slate-100 text-slate-500 px-2 py-1 rounded font-medium" id="tx-count">0 itens</span>
+            </div>
+            <div id="transactions-list" class="flex-1 overflow-y-auto divide-y divide-slate-50">
+              <div class="flex flex-col items-center justify-center h-64 text-slate-400">
+                <i class="fas fa-receipt text-4xl mb-3 opacity-20"></i>
+                <p class="text-sm font-medium">Sem lançamentos neste período.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW: CREDIT CARD -->
+    <div id="view-credit" class="hidden p-4 md:p-8 pb-24 md:pb-8 max-w-7xl mx-auto space-y-8">
+      <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+        <div>
+          <h2 class="text-2xl font-bold text-slate-900">Cartão de Crédito</h2>
+          <p class="text-sm text-slate-500">Cadastre cartão, controle compras e feche/pague faturas com rastreabilidade.</p>
+        </div>
+        <div class="flex gap-3">
+          <button onclick="toggleModal('modal-card')"
+            class="bg-slate-900 text-white px-4 py-3 rounded-xl text-sm font-bold hover:bg-slate-800 transition-colors">
+            <i class="fas fa-plus mr-2"></i> Novo Cartão
+          </button>
+          <button onclick="toggleModal('modal-card-purchase')"
+            class="bg-blue-600 text-white px-4 py-3 rounded-xl text-sm font-bold hover:bg-blue-700 transition-colors">
+            <i class="fas fa-cart-shopping mr-2"></i> Nova Compra
+          </button>
+        </div>
+      </div>
+
+      <!-- Cards List -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div class="lg:col-span-1 bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          <div class="p-4 border-b border-slate-100 flex items-center justify-between">
+            <h3 class="font-bold text-slate-800">Cartões</h3>
+            <button onclick="loadCardsAndRender()" class="text-xs font-bold text-slate-600 hover:text-blue-600">
+              <i class="fas fa-rotate mr-1"></i> Atualizar
+            </button>
+          </div>
+          <div id="cards-list" class="p-4 space-y-3">
+            <div class="text-sm text-slate-400 flex items-center gap-2">
+              <i class="fas fa-spinner animate-spin"></i> Carregando cartões...
+            </div>
+          </div>
+        </div>
+
+        <!-- Invoice Area -->
+        <div class="lg:col-span-2 space-y-6">
+          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div class="p-4 border-b border-slate-100 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+              <div>
+                <h3 class="font-bold text-slate-800">Fatura Selecionada</h3>
+                <p class="text-xs text-slate-400">Resumo e itens (pendente/pago) por competência YYYY-MM.</p>
+              </div>
+
+              <div class="flex flex-col sm:flex-row gap-3 sm:items-center">
+                <div class="flex gap-2 items-center">
+                  <span class="text-xs font-bold text-slate-500 uppercase">Competência</span>
+                  <input id="invoice-ym" type="month"
+                    class="p-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none" />
+                </div>
+
+                <button onclick="loadInvoice()"
+                  class="px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-bold hover:bg-slate-800">
+                  <i class="fas fa-magnifying-glass mr-2"></i> Carregar
+                </button>
+
+                <button onclick="toggleModal('modal-pay-invoice')"
+                  class="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700">
+                  <i class="fas fa-check mr-2"></i> Pagar Fatura
+                </button>
+              </div>
+            </div>
+
+            <div class="p-5 grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div class="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                <p class="text-[11px] text-slate-500 font-bold uppercase">Total</p>
+                <p class="text-xl font-bold text-slate-900" id="inv-total">R$ 0,00</p>
+              </div>
+              <div class="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                <p class="text-[11px] text-slate-500 font-bold uppercase">Pendente</p>
+                <p class="text-xl font-bold text-rose-600" id="inv-pending">R$ 0,00</p>
+              </div>
+              <div class="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                <p class="text-[11px] text-slate-500 font-bold uppercase">Pago</p>
+                <p class="text-xl font-bold text-emerald-600" id="inv-paid">R$ 0,00</p>
+              </div>
+              <div class="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                <p class="text-[11px] text-slate-500 font-bold uppercase">Itens</p>
+                <p class="text-xl font-bold text-slate-900" id="inv-count">0</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div class="p-4 border-b border-slate-100 flex items-center justify-between">
+              <h3 class="font-bold text-slate-800">Compras da Fatura</h3>
+              <span class="text-xs bg-slate-100 text-slate-500 px-2 py-1 rounded font-medium" id="inv-items-badge">0 itens</span>
+            </div>
+            <div id="invoice-items" class="divide-y divide-slate-50">
+              <div class="p-6 text-sm text-slate-400">
+                Selecione um cartão e uma competência (YYYY-MM) para listar as compras.
+              </div>
+            </div>
+          </div>
+
+          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div class="p-4 border-b border-slate-100">
+              <h3 class="font-bold text-slate-800">Gastos do Cartão por Categoria</h3>
+              <p class="text-xs text-slate-400">Somente compras da fatura carregada.</p>
+            </div>
+            <div class="p-4">
+              <canvas id="chart-card-categories" height="160"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW: SETTINGS -->
+    <div id="view-settings" class="hidden p-4 md:p-8 pb-24 space-y-8 max-w-5xl mx-auto">
+      <h2 class="text-2xl font-bold text-slate-900">Configurações & Cadastros</h2>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+        <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
+          <div class="flex justify-between items-center mb-6">
+            <div>
+              <h3 class="font-bold text-slate-800 text-lg">Contas Bancárias</h3>
+              <p class="text-xs text-slate-400">Onde seu dinheiro está.</p>
+            </div>
+            <button onclick="toggleModal('modal-account')"
+              class="bg-slate-900 text-white px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-800 transition-colors">+ Adicionar</button>
+          </div>
+          <ul id="settings-accounts-list" class="space-y-3"></ul>
+        </div>
+
+        <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
+          <div class="flex justify-between items-center mb-6">
+            <div>
+              <h3 class="font-bold text-slate-800 text-lg">Categorias</h3>
+              <p class="text-xs text-slate-400">Organize seus gastos.</p>
+            </div>
+            <button onclick="toggleModal('modal-category')"
+              class="bg-slate-900 text-white px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-800 transition-colors">+ Adicionar</button>
+          </div>
+          <ul id="settings-categories-list" class="space-y-3 max-h-[400px] overflow-y-auto pr-2"></ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW: REPORTS -->
+    <div id="view-reports" class="hidden p-4 md:p-8 pb-24 md:pb-8 max-w-6xl mx-auto space-y-8">
+      <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+        <div>
+          <h2 class="text-2xl font-bold text-slate-900">Relatórios</h2>
+          <p class="text-sm text-slate-500">
+            Geração local (client-side) a partir dos seus lançamentos e cadastros. Exporta .md, .html e PDF via impressão.
+          </p>
+        </div>
+
+        <div class="flex flex-col sm:flex-row gap-3 sm:items-center">
+          <div class="flex gap-2 items-center">
+            <span class="text-xs font-bold text-slate-500 uppercase">Competência</span>
+            <input id="report-ym" type="month"
+              class="p-2 bg-white border border-slate-200 rounded-lg text-sm outline-none" />
+          </div>
+
+          <button onclick="generateAndRenderReport()"
+            class="px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-bold hover:bg-slate-800">
+            <i class="fas fa-wand-magic-sparkles mr-2"></i> Gerar
+          </button>
+
+          <button onclick="downloadReport('md')"
+            class="px-4 py-2 rounded-lg bg-white border border-slate-200 text-slate-700 text-sm font-bold hover:bg-slate-50">
+            <i class="fas fa-download mr-2"></i> .md
+          </button>
+
+          <button onclick="downloadReport('html')"
+            class="px-4 py-2 rounded-lg bg-white border border-slate-200 text-slate-700 text-sm font-bold hover:bg-slate-50">
+            <i class="fas fa-code mr-2"></i> .html
+          </button>
+
+          <button onclick="printReport()"
+            class="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-bold hover:bg-blue-700">
+            <i class="fas fa-file-pdf mr-2"></i> PDF
+          </button>
+        </div>
+      </div>
+
+      <!-- Resumo rápido -->
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="bg-white border border-slate-200 rounded-2xl p-4">
+          <p class="text-[11px] text-slate-500 font-bold uppercase">Saldo (mês)</p>
+          <p class="text-xl font-bold text-slate-900" id="rep-balance">R$ 0,00</p>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-2xl p-4">
+          <p class="text-[11px] text-slate-500 font-bold uppercase">Receitas</p>
+          <p class="text-xl font-bold text-emerald-600" id="rep-income">R$ 0,00</p>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-2xl p-4">
+          <p class="text-[11px] text-slate-500 font-bold uppercase">Despesas</p>
+          <p class="text-xl font-bold text-rose-600" id="rep-expense">R$ 0,00</p>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-2xl p-4">
+          <p class="text-[11px] text-slate-500 font-bold uppercase">Lançamentos</p>
+          <p class="text-xl font-bold text-slate-900" id="rep-count">0</p>
+        </div>
+      </div>
+
+      <!-- Preview do relatório (Markdown -> HTML) -->
+      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        <div class="p-4 border-b border-slate-100 flex items-center justify-between">
+          <div>
+            <h3 class="font-bold text-slate-800">Preview</h3>
+            <p class="text-xs text-slate-400">Relatório em Markdown renderizado localmente.</p>
+          </div>
+          <span class="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded font-medium" id="rep-badge">
+            pronto
+          </span>
+        </div>
+        <div class="p-5">
+          <div id="report-preview" class="prose prose-sm max-w-none"></div>
+        </div>
+      </div>
+
+      <!-- Viewer de PDF (upload) -->
+      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        <div class="p-4 border-b border-slate-100">
+          <h3 class="font-bold text-slate-800">Visualizador de PDF</h3>
+          <p class="text-xs text-slate-400">Upload local e renderização via pdf.js (não envia arquivo para servidor).</p>
+        </div>
+
+        <div class="p-5 space-y-4">
+          <input id="report-pdf-input" type="file" accept="application/pdf"
+            class="block w-full text-sm text-slate-600 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-bold file:bg-slate-900 file:text-white hover:file:bg-slate-800" />
+
+          <div class="flex items-center justify-between">
+            <p class="text-xs text-slate-500">
+              Dica: se o PDF for grande, limite as páginas (pra não explodir sua RAM — tradição é tradição 😄).
+            </p>
+            <div class="text-xs text-slate-500 font-bold" id="pdf-meta"></div>
+          </div>
+
+          <div id="pdf-pages" class="space-y-4"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- AI CHAT MODAL -->
+  <div id="ai-modal" class="fixed inset-0 z-[60] hidden" aria-hidden="true">
+    <div class="absolute inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity" onclick="toggleAIModal()"></div>
+
+    <div class="absolute right-0 top-0 bottom-0 w-full md:w-[480px] bg-white shadow-2xl flex flex-col slide-in" id="ai-panel">
+      <div class="p-4 bg-slate-900 text-white flex justify-between items-center shadow-md z-10">
+        <div class="flex items-center gap-3">
+          <!-- Mantive o robô aqui por consistência do chat; se quiser trocar por logo, eu troco -->
+          <div class="w-10 h-10 bg-slate-800 rounded-full flex items-center justify-center border border-slate-700">
+            <i class="fas fa-robot text-yellow-400"></i>
+          </div>
+          <div>
+            <h3 class="font-bold text-sm">Finance Advisor</h3>
+            <p class="text-[10px] text-slate-400">Powered by Groq</p>
+          </div>
+        </div>
+        <button onclick="toggleAIModal()"
+          class="chat-btn opacity-100 bg-opacity-100 w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 flex items-center justify-center transition-colors">
+          <i class="fas fa-times text-white"></i>
+        </button>
+      </div>
+
+      <div id="chat-messages" class="flex-1 overflow-y-auto p-5 space-y-6 bg-slate-100">
+        <div class="flex gap-3">
+          <div class="chat-bubble-ai p-4 shadow-sm text-sm text-slate-700 max-w-[90%]">
+            <p class="font-bold mb-1">Olá! 👋</p>
+            <p>Posso analisar seus lançamentos, saldos por conta e padrões de gasto do mês atual com base nos seus dados locais.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="p-4 bg-white border-t border-slate-200">
+        <form id="chat-form" class="flex gap-2">
+          <input type="text" id="chat-input"
+            class="flex-1 bg-slate-100 border border-slate-300 text-slate-800 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium"
+            placeholder="Faça uma pergunta sobre suas finanças..." autocomplete="off" />
+          <button type="submit"
+            class="chat-btn opacity-100 bg-opacity-100 bg-blue-600 hover:bg-blue-700 text-white w-12 rounded-xl flex items-center justify-center shadow-lg transition-colors active:scale-95 focus:ring-2 focus:ring-blue-300">
+            <i class="fas fa-paper-plane text-white"></i>
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL NOVA CONTA -->
+  <div id="modal-account" class="fixed inset-0 z-[70] hidden flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm" role="dialog" aria-modal="true">
+    <div class="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+      <h3 class="font-bold text-xl mb-1 text-slate-800">Nova Conta</h3>
+      <p class="text-xs text-slate-500 mb-6">Cadastre onde seu dinheiro está guardado.</p>
+
+      <form onsubmit="handleSaveAccount(event)" class="space-y-4">
+        <div>
+          <label class="text-xs font-bold text-slate-500 uppercase">Apelido da Conta</label>
+          <input type="text" name="accName"
+            class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm"
+            placeholder="Ex: Conta Principal" required />
+        </div>
+
+        <div>
+          <label class="text-xs font-bold text-slate-500 uppercase">Instituição (Banco)</label>
+          <input type="text" name="accBank"
+            class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm"
+            placeholder="Ex: Nubank, Itaú, Bradesco" required />
+        </div>
+
+        <div>
+          <label class="text-xs font-bold text-slate-500 uppercase">Tipo</label>
+          <select name="accType" class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm bg-white">
+            <option value="corrente">Conta Corrente</option>
+            <option value="poupanca">Poupança</option>
+            <option value="investimento">Investimento</option>
+            <option value="carteira">Carteira (Dinheiro Físico)</option>
+            <option value="outros">Outros</option>
+          </select>
+        </div>
+
+        <div class="flex gap-3 pt-2">
+          <button type="button" onclick="toggleModal('modal-account')"
+            class="flex-1 py-3 text-slate-600 font-bold bg-slate-100 hover:bg-slate-200 rounded-xl">Cancelar</button>
+          <button type="submit"
+            class="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg hover:bg-blue-700">Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL NOVA CATEGORIA -->
+  <div id="modal-category" class="fixed inset-0 z-[70] hidden flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm" role="dialog" aria-modal="true">
+    <div class="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+      <h3 class="font-bold text-xl mb-4 text-slate-800">Nova Categoria</h3>
+      <form onsubmit="handleSaveCategory(event)" class="space-y-4">
+        <div>
+          <label class="text-xs font-bold text-slate-500 uppercase">Nome da Categoria</label>
+          <input type="text" name="catName"
+            class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm"
+            placeholder="Ex: Restaurante" required />
+        </div>
+
+        <div class="flex gap-3 pt-2">
+          <button type="button" onclick="toggleModal('modal-category')"
+            class="flex-1 py-3 text-slate-600 font-bold bg-slate-100 hover:bg-slate-200 rounded-xl">Cancelar</button>
+          <button type="submit"
+            class="flex-1 py-3 bg-slate-800 text-white font-bold rounded-xl shadow-lg hover:bg-slate-900">Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: NOVO CARTÃO -->
+  <div id="modal-card" class="fixed inset-0 z-[70] hidden flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm" role="dialog" aria-modal="true">
+    <div class="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
+      <h3 class="font-bold text-xl mb-1 text-slate-800">Novo Cartão</h3>
+      <p class="text-xs text-slate-500 mb-6">Informe dia de fechamento e vencimento para alocar compras em faturas.</p>
+
+      <form onsubmit="handleSaveCard(event)" class="space-y-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs font-bold text-slate-500 uppercase">Nome</label>
+            <input type="text" name="cardName"
+              class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm"
+              placeholder="Ex: Nubank Roxinho" required />
+          </div>
+          <div>
+            <label class="text-xs font-bold text-slate-500 uppercase">Banco</label>
+            <input type="text" name="cardBank"
+              class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm"
+              placeholder="Ex: Nubank" required />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div>
+            <label class="text-xs font-bold text-slate-500 uppercase">Fechamento (dia)</label>
+            <input type="number" min="1" max="31" name="closingDay"
+              class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm"
+              placeholder="Ex: 20" required />
+          </div>
+          <div>
+            <label class="text-xs font-bold text-slate-500 uppercase">Vencimento (dia)</label>
+            <input type="number" min="1" max="31" name="dueDay"
+              class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm"
+              placeholder="Ex: 28" required />
+          </div>
+          <div>
+            <label class="text-xs font-bold text-slate-500 uppercase">Limite</label>
+            <input type="number" min="0" step="0.01" name="creditLimit"
+              class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm"
+              placeholder="Ex: 5000" />
+          </div>
+        </div>
+
+        <div class="flex gap-3 pt-2">
+          <button type="button" onclick="toggleModal('modal-card')"
+            class="flex-1 py-3 text-slate-600 font-bold bg-slate-100 hover:bg-slate-200 rounded-xl">Cancelar</button>
+          <button type="submit"
+            class="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg hover:bg-blue-700">Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: NOVA COMPRA NO CARTÃO -->
+  <div id="modal-card-purchase" class="fixed inset-0 z-[70] hidden flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm" role="dialog" aria-modal="true">
+    <div class="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
+      <h3 class="font-bold text-xl mb-1 text-slate-800">Nova Compra (Cartão)</h3>
+      <p class="text-xs text-slate-500 mb-6">A compra entra como <b>pendente</b> e é alocada na fatura pela regra de fechamento.</p>
+
+      <form onsubmit="handleSaveCardPurchase(event)" class="space-y-4">
+        <div>
+          <label class="text-xs font-bold text-slate-500 uppercase">Cartão</label>
+          <select name="cardId" id="purchase-card"
+            class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm bg-white">
+            <option value="">Carregando...</option>
+          </select>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs font-bold text-slate-500 uppercase">Valor</label>
+            <input type="number" step="0.01" min="0" name="amount"
+              class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm"
+              placeholder="Ex: 79.90" required />
+          </div>
+          <div>
+            <label class="text-xs font-bold text-slate-500 uppercase">Data da Compra</label>
+            <input type="date" name="purchaseDate" id="purchase-date"
+              class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm bg-white" required />
+          </div>
+        </div>
+
+        <div>
+          <label class="text-xs font-bold text-slate-500 uppercase">Descrição</label>
+          <input type="text" name="description"
+            class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm"
+            placeholder="Ex: Amazon, iFood, Uber" required />
+        </div>
+
+        <div>
+          <label class="text-xs font-bold text-slate-500 uppercase">Categoria</label>
+          <select name="category" id="purchase-category"
+            class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm bg-white">
+            <option value="">Carregando...</option>
+          </select>
+        </div>
+
+        <div class="flex gap-3 pt-2">
+          <button type="button" onclick="toggleModal('modal-card-purchase')"
+            class="flex-1 py-3 text-slate-600 font-bold bg-slate-100 hover:bg-slate-200 rounded-xl">Cancelar</button>
+          <button type="submit"
+            class="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg hover:bg-blue-700">Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: PAGAR FATURA -->
+  <div id="modal-pay-invoice" class="fixed inset-0 z-[70] hidden flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm" role="dialog" aria-modal="true">
+    <div class="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
+      <h3 class="font-bold text-xl mb-1 text-slate-800">Pagar Fatura</h3>
+      <p class="text-xs text-slate-500 mb-6">Marca itens pendentes como pagos e lança uma despesa na conta selecionada.</p>
+
+      <form onsubmit="handlePayInvoice(event)" class="space-y-4">
+        <div>
+          <label class="text-xs font-bold text-slate-500 uppercase">Cartão</label>
+          <select name="cardId" id="pay-card"
+            class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm bg-white">
+            <option value="">Selecione...</option>
+          </select>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs font-bold text-slate-500 uppercase">Competência</label>
+            <input name="invoiceYm" id="pay-invoice-ym" type="month"
+              class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm bg-white" required />
+          </div>
+          <div>
+            <label class="text-xs font-bold text-slate-500 uppercase">Data do Pagamento</label>
+            <input name="payDate" id="pay-date" type="date"
+              class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm bg-white" required />
+          </div>
+        </div>
+
+        <div>
+          <label class="text-xs font-bold text-slate-500 uppercase">Conta (Saída)</label>
+          <select name="accountId" id="pay-account"
+            class="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none text-sm bg-white">
+            <option value="">Carregando...</option>
+          </select>
+        </div>
+
+        <div class="flex gap-3 pt-2">
+          <button type="button" onclick="toggleModal('modal-pay-invoice')"
+            class="flex-1 py-3 text-slate-600 font-bold bg-slate-100 hover:bg-slate-200 rounded-xl">Cancelar</button>
+          <button type="submit"
+            class="flex-1 py-3 bg-emerald-600 text-white font-bold rounded-xl shadow-lg hover:bg-emerald-700">Confirmar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="./app.js" defer></script>
+</body>
+</html>
