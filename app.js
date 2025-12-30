@@ -40,6 +40,14 @@ const state = {
     lastMd: "",
     lastHtml: "",
   },
+
+  // Exportações
+  exports: {
+    lastYm: "",
+    lastJsonObj: null,     // objeto retornado em fmt=json
+    lastJsonText: "",      // string JSON formatada
+    lastCsvText: "",       // fallback (quando fetch não usar blob)
+  },
 };
 
 // ==========================================================
@@ -104,6 +112,13 @@ function setDisabled(el, disabled) {
   el.classList.toggle("cursor-not-allowed", !!disabled);
 }
 
+function parseContentDispositionFilename(cd) {
+  // Ex.: attachment; filename="financeai_2025-12_export.csv"
+  if (!cd) return "";
+  const m = /filename\*?=(?:UTF-8''|")?([^";]+)"?/i.exec(cd);
+  return m ? decodeURIComponent(m[1]) : "";
+}
+
 // ==========================================================
 // API (fetch com timeout + erros uniformes)
 // ==========================================================
@@ -154,6 +169,47 @@ async function api(path, options = {}) {
   }
 }
 
+// Download como BLOB (ideal para CSV do /reports/export)
+async function apiBlob(path, options = {}) {
+  const url = `${API_BASE}${path}`;
+  const headers = { ...(options.headers || {}) };
+
+  const controller = new AbortController();
+  const timeoutMs = Number(options.timeoutMs || 20000);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  let resp;
+  try {
+    resp = await fetch(url, { ...options, headers, signal: controller.signal });
+  } catch (e) {
+    clearTimeout(timeoutId);
+    const isAbort = (e && e.name === "AbortError");
+    throw new Error(isAbort
+      ? "Timeout ao baixar arquivo. Verifique o backend."
+      : "Falha de rede/CORS ao baixar arquivo. Verifique API_BASE e o servidor."
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  if (!resp.ok) {
+    let detail = "";
+    try {
+      const j = await resp.json();
+      detail = j.detail || JSON.stringify(j);
+    } catch {
+      try { detail = await resp.text(); } catch { detail = ""; }
+    }
+    throw new Error(detail || `Erro HTTP ${resp.status}`);
+  }
+
+  const blob = await resp.blob();
+  const cd = resp.headers.get("content-disposition") || "";
+  const filename = parseContentDispositionFilename(cd);
+
+  return { blob, filename, contentType: resp.headers.get("content-type") || "" };
+}
+
 // ==========================================================
 // LOADERS
 // ==========================================================
@@ -201,10 +257,16 @@ async function refreshAll() {
     await reloadCharts();
     await renderCreditControls();
 
-    // Se estiver em "reports", renderiza o relatório automaticamente (server-side)
+    // Relatórios: auto-render se a tela estiver aberta
     const reportsView = document.getElementById("view-reports");
     if (reportsView && !reportsView.classList.contains("hidden")) {
       await generateAndRenderReport();
+    }
+
+    // Exportações: auto-preview se a tela estiver aberta
+    const exportsView = document.getElementById("view-exports");
+    if (exportsView && !exportsView.classList.contains("hidden")) {
+      await generateAndRenderExportPreview();
     }
   } catch (e) {
     console.error(e);
@@ -653,7 +715,8 @@ function renderCardCategoryChart(purchases) {
 // UI Actions / Nav (Desktop + Mobile)
 // ==========================================================
 function setActiveNav(view) {
-  const ids = ["dashboard", "credit", "settings", "reports"];
+  // ADIÇÃO: "exports" (tela abaixo de Relatórios)
+  const ids = ["dashboard", "credit", "settings", "reports", "exports"];
 
   // Desktop nav
   ids.forEach(id => {
@@ -680,7 +743,8 @@ function setActiveNav(view) {
 }
 
 window.switchView = async (v) => {
-  ["dashboard","credit","settings","reports"].forEach(id => {
+  // ADIÇÃO: exports
+  ["dashboard","credit","settings","reports","exports"].forEach(id => {
     const el = document.getElementById(`view-${id}`);
     if (el) el.classList.add("hidden");
   });
@@ -694,6 +758,7 @@ window.switchView = async (v) => {
     if (v === "dashboard") await reloadCharts();
     if (v === "credit") await loadCardsAndRender();
     if (v === "reports") await generateAndRenderReport();
+    if (v === "exports") await generateAndRenderExportPreview();
   } catch (e) {
     console.error(e);
     showToast("Erro", e.message || String(e));
@@ -710,9 +775,13 @@ window.toggleModal = (id) => {
 };
 
 window.setTxType = (type) => {
-  document.getElementById("tx-type").value = type;
+  const txType = document.getElementById("tx-type");
+  if (txType) txType.value = type;
+
   const btnE = document.getElementById("btn-expense");
   const btnI = document.getElementById("btn-income");
+
+  if (!btnE || !btnI) return;
 
   if (type === "expense") {
     btnE.className = "py-2.5 text-sm font-bold rounded-lg shadow-sm bg-white text-rose-600 transition-all";
@@ -736,6 +805,12 @@ window.filterDate = async (d) => {
     const reportsView = document.getElementById("view-reports");
     if (reportsView && !reportsView.classList.contains("hidden")) {
       await generateAndRenderReport();
+    }
+
+    // Atualiza export preview se estiver aberto
+    const exportsView = document.getElementById("view-exports");
+    if (exportsView && !exportsView.classList.contains("hidden")) {
+      await generateAndRenderExportPreview();
     }
   } catch (e) {
     console.error(e);
@@ -819,12 +894,12 @@ if (txForm) {
     if (btn) { btn.innerHTML = "Salvando..."; setDisabled(btn, true); }
 
     const payload = {
-      type: document.getElementById("tx-type").value,
-      amount: parseFloat(document.getElementById("tx-amount").value),
-      description: document.getElementById("tx-desc").value,
-      date: document.getElementById("tx-date").value,
-      account_id: Number(document.getElementById("tx-account").value),
-      category: document.getElementById("tx-category").value,
+      type: document.getElementById("tx-type")?.value || "expense",
+      amount: parseFloat(document.getElementById("tx-amount")?.value || "0"),
+      description: document.getElementById("tx-desc")?.value || "",
+      date: document.getElementById("tx-date")?.value || "",
+      account_id: Number(document.getElementById("tx-account")?.value || 0),
+      category: document.getElementById("tx-category")?.value || "Geral",
     };
 
     try {
@@ -841,6 +916,12 @@ if (txForm) {
       const reportsView = document.getElementById("view-reports");
       if (reportsView && !reportsView.classList.contains("hidden")) {
         await generateAndRenderReport();
+      }
+
+      // Se export aberto, atualiza preview
+      const exportsView = document.getElementById("view-exports");
+      if (exportsView && !exportsView.classList.contains("hidden")) {
+        await generateAndRenderExportPreview();
       }
     } catch (e) {
       console.error(e);
@@ -915,6 +996,11 @@ window.handleSaveCardPurchase = async (e) => {
   if (reportsView && !reportsView.classList.contains("hidden")) {
     await generateAndRenderReport();
   }
+
+  const exportsView = document.getElementById("view-exports");
+  if (exportsView && !exportsView.classList.contains("hidden")) {
+    await generateAndRenderExportPreview();
+  }
 };
 
 window.handlePayInvoice = async (e) => {
@@ -939,6 +1025,11 @@ window.handlePayInvoice = async (e) => {
   const reportsView = document.getElementById("view-reports");
   if (reportsView && !reportsView.classList.contains("hidden")) {
     await generateAndRenderReport();
+  }
+
+  const exportsView = document.getElementById("view-exports");
+  if (exportsView && !exportsView.classList.contains("hidden")) {
+    await generateAndRenderExportPreview();
   }
 
   if (res && res.paid_total) alert(`Fatura paga: ${toMoney(res.paid_total)}`);
@@ -1041,6 +1132,16 @@ async function deleteCardPurchase(id) {
   await loadCombinedForCurrentMonth();
   renderAll();
   await reloadCharts();
+
+  const reportsView = document.getElementById("view-reports");
+  if (reportsView && !reportsView.classList.contains("hidden")) {
+    await generateAndRenderReport();
+  }
+
+  const exportsView = document.getElementById("view-exports");
+  if (exportsView && !exportsView.classList.contains("hidden")) {
+    await generateAndRenderExportPreview();
+  }
 }
 window.deleteCardPurchase = deleteCardPurchase;
 
@@ -1052,10 +1153,12 @@ if (chatForm) {
   chatForm.onsubmit = async (e) => {
     e.preventDefault();
     const input = document.getElementById("chat-input");
-    const q = input.value.trim();
+    const q = (input && input.value ? input.value.trim() : "");
     if (!q || state.isAiProcessing) return;
 
     const msgs = document.getElementById("chat-messages");
+    if (!msgs) return;
+
     msgs.innerHTML += `
       <div class="flex gap-3 flex-row-reverse">
         <div class="chat-bubble-user p-3 px-4 shadow-sm text-sm max-w-[85%]">${safeText(q)}</div>
@@ -1167,7 +1270,7 @@ function aggregateMonthlyFromReport(report, year, month) {
 
   const byCat = {};      // despesas por categoria (cash real + card purchases)
   const byAccount = {};  // delta por conta (CAIXA, inclui pagamento e receitas)
-  const byDay = {};      // YYYY-MM-DD => {income, expense_total}
+  const byDay = {};      // YYYY-MM-DD => {income, expense}
 
   tx.forEach(t => {
     const amt = Number(t.amount || 0);
@@ -1250,6 +1353,7 @@ function generateReportMarkdown(data) {
   lines.push(``);
   lines.push(`**Gerado em:** ${dtGen}`);
   lines.push(``);
+
   lines.push(`## 1. Sumário Executivo`);
   lines.push(`- **Receitas (Caixa):** ${mdMoney(data.income)}`);
   lines.push(`- **Despesas (Caixa, sem pagamento de fatura):** ${mdMoney(data.expenseCash)}`);
@@ -1420,6 +1524,138 @@ window.printReport = async () => {
 };
 
 // ==========================================================
+// NOVA TELA: EXPORTAÇÕES (abaixo de Relatórios)
+// Usa /reports/export?year=&month=&fmt=csv|json
+// ==========================================================
+function exportDefaultYmFromUi() {
+  // Preferência: usa o mesmo YM do relatório (se existir)
+  const repYm = document.getElementById("report-ym")?.value;
+  const fallback = ymNow();
+  return (repYm && parseYm(repYm)) ? repYm : fallback;
+}
+
+function setExportBadge(ym) {
+  const badge = document.getElementById("exp-badge");
+  if (!badge) return;
+  const p = parseYm(ym);
+  badge.innerText = p ? `${monthNamePt(p.month)} ${p.year}` : String(ym || "");
+}
+
+function renderExportPreviewArea(text, mode = "json") {
+  const prev = document.getElementById("export-preview");
+  if (!prev) return;
+
+  if (!text) {
+    prev.innerHTML = `<div class="text-sm text-slate-400">Sem preview.</div>`;
+    return;
+  }
+
+  if (mode === "json") {
+    prev.innerHTML = `<pre class="text-xs bg-slate-50 border border-slate-200 rounded-2xl p-4 overflow-auto whitespace-pre-wrap">${safeText(text)}</pre>`;
+    return;
+  }
+
+  // CSV preview: mostra em <pre> (sem inventar tabela gigante)
+  prev.innerHTML = `<pre class="text-xs bg-slate-50 border border-slate-200 rounded-2xl p-4 overflow-auto whitespace-pre-wrap">${safeText(text)}</pre>`;
+}
+
+window.generateAndRenderExportPreview = async () => {
+  const ymInput = document.getElementById("export-ym");
+  if (ymInput && !ymInput.value) ymInput.value = exportDefaultYmFromUi();
+
+  const ym = ymInput ? ymInput.value : exportDefaultYmFromUi();
+  const parsed = parseYm(ym);
+  if (!parsed) {
+    showToast("Exportações", "Competência inválida.");
+    return;
+  }
+
+  const { year, month } = parsed;
+  setExportBadge(ym);
+
+  // Preview padrão: JSON (mais interpretável; CSV fica para download)
+  try {
+    const obj = await api(`/reports/export?year=${year}&month=${month}&fmt=json`);
+    const pretty = JSON.stringify(obj, null, 2);
+
+    state.exports.lastYm = ym;
+    state.exports.lastJsonObj = obj;
+    state.exports.lastJsonText = pretty;
+
+    // KPIs simples na tela de export (opcional)
+    const txCount = (obj?.transactions?.length || 0) + (obj?.card_purchases?.length || 0);
+    const el = document.getElementById("exp-count");
+    if (el) el.innerText = String(txCount);
+
+    renderExportPreviewArea(pretty, "json");
+  } catch (e) {
+    console.error(e);
+    showToast("Exportações", e.message || String(e));
+  }
+};
+
+window.downloadExportJson = async () => {
+  const ymInput = document.getElementById("export-ym");
+  const ym = (ymInput && ymInput.value) ? ymInput.value : exportDefaultYmFromUi();
+  const parsed = parseYm(ym);
+  if (!parsed) {
+    showToast("Exportações", "Competência inválida.");
+    return;
+  }
+
+  // Se não houver JSON em cache ou mudou a competência, gera preview de novo
+  if (!state.exports.lastJsonText || state.exports.lastYm !== ym) {
+    await generateAndRenderExportPreview();
+  }
+
+  downloadBlob(`financeai_${ym}_export.json`, state.exports.lastJsonText || "{}", "application/json;charset=utf-8");
+};
+
+window.downloadExportCsv = async () => {
+  const ymInput = document.getElementById("export-ym");
+  const ym = (ymInput && ymInput.value) ? ymInput.value : exportDefaultYmFromUi();
+  const parsed = parseYm(ym);
+  if (!parsed) {
+    showToast("Exportações", "Competência inválida.");
+    return;
+  }
+
+  const { year, month } = parsed;
+
+  try {
+    // Blob real (mantém Content-Disposition)
+    const { blob, filename } = await apiBlob(`/reports/export?year=${year}&month=${month}&fmt=csv`, { method: "GET" });
+
+    const finalName = filename || `financeai_${ym}_export.csv`;
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = finalName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    console.error(e);
+
+    // Fallback: tenta baixar como texto (quando blob falhar por qualquer motivo)
+    try {
+      const text = await api(`/reports/export?year=${year}&month=${month}&fmt=csv`);
+      const csvText = String(text || "");
+      state.exports.lastCsvText = csvText;
+      downloadBlob(`financeai_${ym}_export.csv`, csvText, "text/csv;charset=utf-8");
+      renderExportPreviewArea(csvText.slice(0, 8000), "csv");
+    } catch (err2) {
+      console.error(err2);
+      showToast("Exportações", err2.message || String(err2));
+    }
+
+    showToast("Exportações", e.message || String(e));
+  }
+};
+
+// ==========================================================
 // PDF Viewer (upload local) - pdf.js
 // ==========================================================
 async function renderPdfFile(file) {
@@ -1504,9 +1740,13 @@ document.addEventListener("DOMContentLoaded", () => {
   const invYm = document.getElementById("invoice-ym");
   if (invYm) invYm.addEventListener("change", () => window.loadInvoice());
 
-  // Se quiser: ao mudar competência do relatório, recalcula preview
+  // Ao mudar competência do relatório, recalcula preview
   const repYm = document.getElementById("report-ym");
   if (repYm) repYm.addEventListener("change", () => window.generateAndRenderReport());
+
+  // Ao mudar competência de exportação, recalcula preview
+  const expYm = document.getElementById("export-ym");
+  if (expYm) expYm.addEventListener("change", () => window.generateAndRenderExportPreview());
 
   // Hook PDF input
   const inp = document.getElementById("report-pdf-input");

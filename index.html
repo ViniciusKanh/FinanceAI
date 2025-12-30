@@ -60,11 +60,10 @@
   <!-- Sidebar (Desktop) -->
   <aside class="hidden md:flex flex-col w-64 bg-white border-r border-slate-200 h-full z-20 shadow-sm">
     <div class="p-6 flex items-center gap-3 border-b border-slate-100">
-      <!-- LOGO (substitui o ícone) -->
-<div class="w-10 h-10 rounded-lg bg-white border border-slate-200 flex items-center justify-center shadow-sm overflow-hidden">
-  <img src="./assets/logo%202.png" alt="FinanceAI Logo" class="w-full h-full object-contain p-1" />
-</div>
-
+      <!-- LOGO -->
+      <div class="w-10 h-10 rounded-lg bg-white border border-slate-200 flex items-center justify-center shadow-sm overflow-hidden">
+        <img src="./assets/logo%202.png" alt="FinanceAI Logo" class="w-full h-full object-contain p-1" />
+      </div>
 
       <div>
         <h1 class="text-lg font-bold text-slate-800 leading-tight">Finance<span class="text-blue-600">AI</span></h1>
@@ -76,6 +75,12 @@
       <button onclick="switchView('dashboard')" id="nav-dashboard"
         class="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg bg-blue-50 text-blue-700 transition-colors border border-blue-100">
         <i class="fas fa-chart-line w-5"></i> Dashboard
+      </button>
+
+      <!-- NOVO: PREDIÇÕES -->
+      <button onclick="switchView('predictions')" id="nav-predictions"
+        class="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg text-slate-600 hover:bg-slate-50 transition-colors">
+        <i class="fas fa-wand-magic-sparkles w-5"></i> Predições
       </button>
 
       <button onclick="switchView('credit')" id="nav-credit"
@@ -120,9 +125,15 @@
       <i class="fas fa-robot text-xl text-yellow-400"></i>
     </button>
 
+    <!-- NOVO: PREDIÇÕES -->
+    <button id="mnav-predictions" onclick="switchView('predictions')" class="flex flex-col items-center p-2 text-slate-400 hover:text-blue-600">
+      <i class="fas fa-wand-magic-sparkles text-xl mb-1"></i>
+      <span class="text-[10px] font-bold">Pred</span>
+    </button>
+
     <button id="mnav-settings" onclick="switchView('settings')" class="flex flex-col items-center p-2 text-slate-400 hover:text-blue-600">
       <i class="fas fa-sliders-h text-xl mb-1"></i>
-      <span class="text-[10px] font-bold">Cadastros</span>
+      <span class="text-[10px] font-bold">Cad</span>
     </button>
   </div>
 
@@ -142,10 +153,8 @@
     <!-- Header Mobile -->
     <header class="md:hidden flex justify-between items-center p-4 bg-white border-b border-slate-200 sticky top-0 z-30">
       <div class="flex items-center gap-2">
-        <!-- LOGO (substitui o ícone) -->
         <img src="./assets/logo%202.png" alt="FinanceAI Logo" class="w-8 h-8 object-contain" />
-<h1 class="text-xl font-bold text-slate-800">FinanceAI</h1>
-
+        <h1 class="text-xl font-bold text-slate-800">FinanceAI</h1>
       </div>
       <div class="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-bold flex items-center gap-1">
         <span class="w-2 h-2 bg-green-500 rounded-full"></span> Online
@@ -153,7 +162,7 @@
     </header>
 
     <!-- VIEW: DASHBOARD -->
-    <div id="view-dashboard" class="p-4 md:p-8 pb-24 md:pb-8 max-w-7xl mx-auto space-y-6"> 
+    <div id="view-dashboard" class="p-4 md:p-8 pb-24 md:pb-8 max-w-7xl mx-auto space-y-6">
       <!-- Date Navigation -->
       <div class="bg-white rounded-xl p-2 shadow-sm border border-slate-200 flex justify-between items-center max-w-md mx-auto md:mx-0">
         <button onclick="filterDate('prev')" class="w-10 h-10 flex items-center justify-center text-slate-500 hover:bg-slate-100 rounded-lg transition-colors">
@@ -303,6 +312,186 @@
       </div>
     </div>
 
+    <!-- VIEW: PREDICTIONS (NOVO) -->
+    <div id="view-predictions" class="hidden p-4 md:p-8 pb-24 md:pb-8 max-w-7xl mx-auto space-y-8">
+      <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+        <div>
+          <h2 class="text-2xl font-bold text-slate-900">Predições</h2>
+          <p class="text-sm text-slate-500">
+            Projeções a partir do seu histórico (sem mágica: se o histórico é bagunçado, a previsão honra a tradição).
+          </p>
+        </div>
+
+        <div class="flex flex-col sm:flex-row gap-3 sm:items-center">
+          <div class="flex gap-2 items-center">
+            <span class="text-xs font-bold text-slate-500 uppercase">Horizonte</span>
+            <select id="pred-horizon"
+              class="p-2 bg-white border border-slate-200 rounded-lg text-sm outline-none">
+              <option value="7">7 dias</option>
+              <option value="14">14 dias</option>
+              <option value="30" selected>30 dias</option>
+              <option value="60">60 dias</option>
+              <option value="90">90 dias</option>
+            </select>
+          </div>
+
+          <div class="flex gap-2 items-center">
+            <span class="text-xs font-bold text-slate-500 uppercase">Base</span>
+            <select id="pred-scope"
+              class="p-2 bg-white border border-slate-200 rounded-lg text-sm outline-none">
+              <option value="all" selected>Todas as contas</option>
+              <option value="account">Conta específica</option>
+            </select>
+          </div>
+
+          <select id="pred-account"
+            class="hidden p-2 bg-white border border-slate-200 rounded-lg text-sm outline-none">
+            <option value="">Carregando contas...</option>
+          </select>
+
+          <button onclick="runPredictions()" id="btn-run-pred"
+            class="px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-bold hover:bg-slate-800">
+            <i class="fas fa-wand-magic-sparkles mr-2"></i> Gerar
+          </button>
+        </div>
+      </div>
+
+      <!-- Aviso/Metadados -->
+      <div class="bg-white border border-slate-200 rounded-2xl p-5">
+        <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+          <div class="flex gap-3">
+            <div class="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-700">
+              <i class="fas fa-circle-info"></i>
+            </div>
+            <div>
+              <p class="font-bold text-slate-800">Como interpretar</p>
+              <p class="text-sm text-slate-500">
+                As predições são estimativas. Use como apoio (planejamento), não como sentença (destino).
+              </p>
+            </div>
+          </div>
+          <div class="text-xs text-slate-500 font-bold">
+            <span id="pred-meta">Modelo: — | Última execução: —</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- KPIs -->
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="bg-white border border-slate-200 rounded-2xl p-4">
+          <p class="text-[11px] text-slate-500 font-bold uppercase">Saldo projetado</p>
+          <p class="text-xl font-bold text-slate-900" id="pred-balance">R$ 0,00</p>
+          <p class="text-xs text-slate-400 mt-1" id="pred-balance-note">para o fim do horizonte</p>
+        </div>
+
+        <div class="bg-white border border-slate-200 rounded-2xl p-4">
+          <p class="text-[11px] text-slate-500 font-bold uppercase">Receitas projetadas</p>
+          <p class="text-xl font-bold text-emerald-600" id="pred-income">R$ 0,00</p>
+          <p class="text-xs text-slate-400 mt-1">no horizonte</p>
+        </div>
+
+        <div class="bg-white border border-slate-200 rounded-2xl p-4">
+          <p class="text-[11px] text-slate-500 font-bold uppercase">Despesas projetadas</p>
+          <p class="text-xl font-bold text-rose-600" id="pred-expense">R$ 0,00</p>
+          <p class="text-xs text-slate-400 mt-1">no horizonte</p>
+        </div>
+
+        <div class="bg-white border border-slate-200 rounded-2xl p-4">
+          <p class="text-[11px] text-slate-500 font-bold uppercase">Risco (anômalo)</p>
+          <p class="text-xl font-bold text-slate-900" id="pred-risk">—</p>
+          <p class="text-xs text-slate-400 mt-1">alertas potenciais</p>
+        </div>
+      </div>
+
+      <!-- Gráficos -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div class="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          <div class="p-4 border-b border-slate-100 flex items-center justify-between">
+            <div>
+              <h3 class="font-bold text-slate-800">Projeção de Fluxo</h3>
+              <p class="text-xs text-slate-400">Histórico recente + previsão (por dia).</p>
+            </div>
+            <button onclick="runPredictions()" class="text-xs font-bold text-slate-600 hover:text-blue-600">
+              <i class="fas fa-rotate mr-1"></i> Recalcular
+            </button>
+          </div>
+          <div class="p-4">
+            <canvas id="chart-pred-flow" height="110"></canvas>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          <div class="p-4 border-b border-slate-100">
+            <h3 class="font-bold text-slate-800">Categorias prováveis</h3>
+            <p class="text-xs text-slate-400">Top despesas esperadas (horizonte).</p>
+          </div>
+          <div class="p-4">
+            <canvas id="chart-pred-categories" height="160"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Recomendações / Alertas -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          <div class="p-4 border-b border-slate-100">
+            <h3 class="font-bold text-slate-800">Alertas</h3>
+            <p class="text-xs text-slate-400">Sinais de gasto acima do padrão / recorrências suspeitas.</p>
+          </div>
+          <div id="pred-alerts" class="p-4 space-y-3">
+            <div class="text-sm text-slate-400 flex items-center gap-2">
+              <i class="fas fa-circle-info"></i> Gere uma previsão para listar alertas.
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          <div class="p-4 border-b border-slate-100">
+            <h3 class="font-bold text-slate-800">Ações sugeridas</h3>
+            <p class="text-xs text-slate-400">Checklist operacional (planejamento e controle).</p>
+          </div>
+          <div id="pred-actions" class="p-4 space-y-3">
+            <div class="text-sm text-slate-400 flex items-center gap-2">
+              <i class="fas fa-list-check"></i> Gere uma previsão para ver sugestões.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Detalhamento -->
+      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        <div class="p-4 border-b border-slate-100 flex items-center justify-between">
+          <div>
+            <h3 class="font-bold text-slate-800">Detalhamento da previsão</h3>
+            <p class="text-xs text-slate-400">Linhas previstas (para auditoria/explicação).</p>
+          </div>
+          <span class="text-xs bg-slate-100 text-slate-500 px-2 py-1 rounded font-medium" id="pred-count">0 itens</span>
+        </div>
+        <div id="pred-list" class="divide-y divide-slate-50">
+          <div class="p-6 text-sm text-slate-400">
+            Sem dados. Execute <b>Gerar</b> para preencher.
+          </div>
+        </div>
+      </div>
+
+      <!-- Integração opcional com o chat -->
+      <div class="bg-white border border-slate-200 rounded-2xl p-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div class="flex items-start gap-3">
+          <div class="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center">
+            <i class="fas fa-robot text-yellow-400"></i>
+          </div>
+          <div>
+            <p class="font-bold text-slate-800">Quer explicação “em português de gente”?</p>
+            <p class="text-sm text-slate-500">Abra o Assistente IA e peça para interpretar as predições e sugerir plano de ação.</p>
+          </div>
+        </div>
+        <button onclick="toggleAIModal()"
+          class="px-4 py-3 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 shadow-lg shadow-blue-200 active:scale-95">
+          <i class="fas fa-comments mr-2"></i> Abrir IA
+        </button>
+      </div>
+    </div>
+
     <!-- VIEW: CREDIT CARD -->
     <div id="view-credit" class="hidden p-4 md:p-8 pb-24 md:pb-8 max-w-7xl mx-auto space-y-8">
       <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
@@ -322,7 +511,6 @@
         </div>
       </div>
 
-      <!-- Cards List -->
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div class="lg:col-span-1 bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
           <div class="p-4 border-b border-slate-100 flex items-center justify-between">
@@ -338,7 +526,6 @@
           </div>
         </div>
 
-        <!-- Invoice Area -->
         <div class="lg:col-span-2 space-y-6">
           <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
             <div class="p-4 border-b border-slate-100 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
@@ -481,7 +668,6 @@
         </div>
       </div>
 
-      <!-- Resumo rápido -->
       <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div class="bg-white border border-slate-200 rounded-2xl p-4">
           <p class="text-[11px] text-slate-500 font-bold uppercase">Saldo (mês)</p>
@@ -501,23 +687,19 @@
         </div>
       </div>
 
-      <!-- Preview do relatório (Markdown -> HTML) -->
       <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div class="p-4 border-b border-slate-100 flex items-center justify-between">
           <div>
             <h3 class="font-bold text-slate-800">Preview</h3>
             <p class="text-xs text-slate-400">Relatório em Markdown renderizado localmente.</p>
           </div>
-          <span class="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded font-medium" id="rep-badge">
-            pronto
-          </span>
+          <span class="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded font-medium" id="rep-badge">pronto</span>
         </div>
         <div class="p-5">
           <div id="report-preview" class="prose prose-sm max-w-none"></div>
         </div>
       </div>
 
-      <!-- Viewer de PDF (upload) -->
       <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div class="p-4 border-b border-slate-100">
           <h3 class="font-bold text-slate-800">Visualizador de PDF</h3>
@@ -548,7 +730,6 @@
     <div class="absolute right-0 top-0 bottom-0 w-full md:w-[480px] bg-white shadow-2xl flex flex-col slide-in" id="ai-panel">
       <div class="p-4 bg-slate-900 text-white flex justify-between items-center shadow-md z-10">
         <div class="flex items-center gap-3">
-          <!-- Mantive o robô aqui por consistência do chat; se quiser trocar por logo, eu troco -->
           <div class="w-10 h-10 bg-slate-800 rounded-full flex items-center justify-center border border-slate-700">
             <i class="fas fa-robot text-yellow-400"></i>
           </div>
@@ -804,5 +985,25 @@
   </div>
 
   <script src="./app.js" defer></script>
+
+  <!--
+    NOTAS IMPORTANTES (para o app.js):
+    1) Você precisa implementar no app.js:
+       - switchView('predictions') adicionando:
+         * destaque do menu desktop: nav-predictions
+         * destaque do menu mobile: mnav-predictions
+         * alternância de visibilidade: view-predictions
+       - runPredictions(): preencher:
+         * pred-meta, pred-balance, pred-income, pred-expense, pred-risk, pred-count
+         * pred-alerts, pred-actions, pred-list
+         * chart-pred-flow, chart-pred-categories (Chart.js)
+       - carregar contas em pred-account e alternar exibição quando pred-scope == 'account'
+
+    2) IDs adicionados nesta tela (Predições):
+       pred-horizon, pred-scope, pred-account, btn-run-pred
+       pred-meta, pred-balance, pred-balance-note, pred-income, pred-expense, pred-risk
+       chart-pred-flow, chart-pred-categories
+       pred-alerts, pred-actions, pred-list, pred-count
+  -->
 </body>
 </html>
