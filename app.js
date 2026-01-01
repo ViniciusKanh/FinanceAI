@@ -809,93 +809,217 @@ function renderPredictionsCharts(payload) {
 
   const hist = Array.isArray(payload?.history) ? payload.history : [];
   const pred = Array.isArray(payload?.predictions) ? payload.predictions : [];
+  const basis = String(payload?.basis || "").toLowerCase();
+
+  // Heurística: detectar modo diário (net_pred) vs mensal (income/expense)
+  const hasNetPred = pred.some(r => r && Object.prototype.hasOwnProperty.call(r, "net_pred"));
+  const hasIncomePred = pred.some(r => r && (r.income_pred != null || r.income != null));
+  const hasExpensePred = pred.some(r => r && (r.expense_pred != null || r.expense != null || r.expense_total != null));
+  const isDaily = basis.includes("daily") || (hasNetPred && !(hasIncomePred && hasExpensePred));
+
+  // Utilitários
+  const num = (v) => {
+    const x = Number(v);
+    return Number.isFinite(x) ? x : 0;
+  };
+
+  const rawLabel = (r) => (r?.date || r?.ym || r?.period || null);
+
+  const fmtLabel = (x) => {
+    if (!x) return "";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(x)) return new Date(x + "T00:00:00").toLocaleDateString("pt-BR");
+    return String(x);
+  };
+
+  // Garante estrutura do state
+  if (!window.state) window.state = {};
+  if (!state.charts) state.charts = {};
 
   // ---------- Flow (hist + pred) ----------
+  // - Modo mensal: plota Receitas vs Despesas
+  // - Modo diário: plota Saldo líquido (net) + zero-line implícita via eixo
   if (flowCanvas) {
     const labels = [
-      ...hist.map(r => r.date || r.ym),
-      ...pred.map(r => r.date || r.ym)
+      ...hist.map(rawLabel),
+      ...pred.map(rawLabel),
     ].filter(Boolean);
 
-    const fmtLabel = (x) => {
-      if (!x) return "";
-      if (/^\d{4}-\d{2}-\d{2}$/.test(x)) return new Date(x + "T00:00:00").toLocaleDateString("pt-BR");
-      return x;
-    };
+    if (!labels.length) {
+      destroyChart(state.charts.predFlow);
+      state.charts.predFlow = null;
+    } else {
+      destroyChart(state.charts.predFlow);
 
-    const incomeSeries = [
-      ...hist.map(r => Number(r.income || 0)),
-      ...pred.map(r => Number(r.income_pred ?? r.income ?? 0)),
-    ];
+      if (isDaily) {
+        // Série histórica pode não ter net; tenta derivar, senão usa 0
+        const netSeries = [
+          ...hist.map(r => {
+            const hasNet = r && Object.prototype.hasOwnProperty.call(r, "net");
+            if (hasNet) return num(r.net);
+            const inc = num(r?.income ?? 0);
+            const exp = num(r?.expense ?? r?.expense_total ?? 0);
+            return inc - exp;
+          }),
+          ...pred.map(r => num(r?.net_pred ?? r?.net ?? 0)),
+        ];
 
-    const expenseSeries = [
-      ...hist.map(r => Number(r.expense ?? r.expense_total ?? 0)),
-      ...pred.map(r => Number(r.expense_pred ?? r.expense ?? r.expense_total ?? 0)),
-    ];
+        state.charts.predFlow = new Chart(flowCanvas, {
+          type: "line",
+          data: {
+            labels: labels.map(fmtLabel),
+            datasets: [
+              { label: "Saldo líquido", data: netSeries, tension: 0.25 },
+            ],
+          },
+          options: {
+            responsive: true,
+            plugins: {
+              legend: { display: true },
+              tooltip: {
+                callbacks: {
+                  label: (ctx) => `${ctx.dataset.label}: ${toMoney(ctx.parsed.y)}`,
+                },
+              },
+            },
+            scales: {
+              y: {
+                ticks: { callback: (v) => toMoney(v) },
+              },
+            },
+          },
+        });
+      } else {
+        const incomeSeries = [
+          ...hist.map(r => num(r?.income ?? 0)),
+          ...pred.map(r => num(r?.income_pred ?? r?.income ?? 0)),
+        ];
 
-    destroyChart(state.charts.predFlow);
-    state.charts.predFlow = new Chart(flowCanvas, {
-      type: "line",
-      data: {
-        labels: labels.map(fmtLabel),
-        datasets: [
-          { label: "Receitas", data: incomeSeries, tension: 0.25 },
-          { label: "Despesas", data: expenseSeries, tension: 0.25 },
-        ],
-      },
-      options: {
-        responsive: true,
-        plugins: {
-          legend: { display: true },
-          tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${toMoney(ctx.parsed.y)}` } }
-        },
-        scales: { y: { ticks: { callback: (v) => toMoney(v) } } },
+        const expenseSeries = [
+          ...hist.map(r => num(r?.expense ?? r?.expense_total ?? 0)),
+          ...pred.map(r => num(r?.expense_pred ?? r?.expense ?? r?.expense_total ?? 0)),
+        ];
+
+        state.charts.predFlow = new Chart(flowCanvas, {
+          type: "line",
+          data: {
+            labels: labels.map(fmtLabel),
+            datasets: [
+              { label: "Receitas", data: incomeSeries, tension: 0.25 },
+              { label: "Despesas", data: expenseSeries, tension: 0.25 },
+            ],
+          },
+          options: {
+            responsive: true,
+            plugins: {
+              legend: { display: true },
+              tooltip: {
+                callbacks: {
+                  label: (ctx) => `${ctx.dataset.label}: ${toMoney(ctx.parsed.y)}`,
+                },
+              },
+            },
+            scales: {
+              y: { ticks: { callback: (v) => toMoney(v) } },
+            },
+          },
+        });
       }
-    });
+    }
   }
 
   // ---------- Categories provável (heurística local) ----------
+  // Observação: continua sendo "heurística", mas agora:
+  // - filtra só despesas (inclui cartão e expense)
+  // - ignora valores inválidos/<=0
+  // - limita top-N e trata caso sem dados
   if (catCanvas) {
-    // usa o histórico recente do mês corrente para estimar “top categorias”
     const lastCats = {};
     const rows = Array.isArray(state.combinedTransactions) ? state.combinedTransactions : [];
-    rows.forEach(r => {
-      const isExpense = (r.source === "card") || (r.type === "expense");
-      if (!isExpense) return;
-      const cat = r.category || "Geral";
-      lastCats[cat] = (lastCats[cat] || 0) + Number(r.amount || 0);
-    });
+
+    for (const r of rows) {
+      const isExpense = (r?.source === "card") || (r?.type === "expense");
+      if (!isExpense) continue;
+
+      const amt = num(r?.amount);
+      if (amt <= 0) continue;
+
+      const cat = (r?.category && String(r.category).trim()) ? String(r.category).trim() : "Geral";
+      lastCats[cat] = (lastCats[cat] || 0) + amt;
+    }
 
     const top = Object.entries(lastCats)
-      .sort((a,b) => b[1] - a[1])
+      .sort((a, b) => b[1] - a[1])
       .slice(0, 8);
 
-    const labels = top.map(x => x[0]);
-    const totals = top.map(x => x[1]);
-
     destroyChart(state.charts.predCats);
-    state.charts.predCats = new Chart(catCanvas, {
-      type: "doughnut",
-      data: { labels, datasets: [{ data: totals }] },
-      options: {
-        responsive: true,
-        plugins: {
-          legend: { display: true, position: "bottom" },
-          tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${toMoney(ctx.parsed)}` } }
+
+    if (!top.length) {
+      state.charts.predCats = null;
+      // opcional: mostrar toast discreto, sem poluir UX
+      // showToast("Predições", "Sem dados suficientes para categorias previstas.");
+    } else {
+      const labels = top.map(x => x[0]);
+      const totals = top.map(x => x[1]);
+
+      state.charts.predCats = new Chart(catCanvas, {
+        type: "doughnut",
+        data: {
+          labels,
+          datasets: [{ data: totals }],
         },
-      }
-    });
+        options: {
+          responsive: true,
+          plugins: {
+            legend: { display: true, position: "bottom" },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => `${ctx.label}: ${toMoney(ctx.parsed)}`,
+              },
+            },
+          },
+        },
+      });
+    }
   }
 }
 
+
 function renderPredictionsUI(payload) {
   const pred = Array.isArray(payload?.predictions) ? payload.predictions : [];
-  const horizonDays = pred.length || Number(document.getElementById("pred-horizon")?.value || 0);
+  const basis = String(payload?.basis || "").toLowerCase();
 
+  // Heurística para detectar modo diário (net_pred) vs mensal (income/expense)
+  const hasNetPred = pred.some(r => r && Object.prototype.hasOwnProperty.call(r, "net_pred"));
+  const hasIncomePred = pred.some(r => r && (r.income_pred != null || r.income != null));
+  const hasExpensePred = pred.some(r => r && (r.expense_pred != null || r.expense != null || r.expense_total != null));
+  const isDaily = basis.includes("daily") || (hasNetPred && !(hasIncomePred && hasExpensePred));
+
+  // Horizonte (dias/períodos)
+  const horizonInput = Number(document.getElementById("pred-horizon")?.value || 0);
+  const horizon = pred.length || horizonInput;
+
+  // Normalização numérica segura
+  const num = (v) => {
+    const x = Number(v);
+    return Number.isFinite(x) ? x : 0;
+  };
+
+  // ----------------------------
   // KPIs
-  const income = predSum(pred, "income_pred") || predSum(pred, "income");
-  const expense = predSum(pred, "expense_pred") || predSum(pred, "expense") || predSum(pred, "expense_total");
-  const balance = income - expense;
+  // ----------------------------
+  let income = 0;
+  let expense = 0;
+  let balance = 0;
+
+  if (isDaily) {
+    // Modo diário: usa net_pred diretamente
+    balance = pred.reduce((acc, r) => acc + num(r?.net_pred), 0);
+  } else {
+    // Modo mensal/competência: usa income/expense
+    income = predSum(pred, "income_pred") || predSum(pred, "income") || 0;
+    expense = predSum(pred, "expense_pred") || predSum(pred, "expense") || predSum(pred, "expense_total") || 0;
+    balance = income - expense;
+  }
 
   const elBal = document.getElementById("pred-balance");
   const elInc = document.getElementById("pred-income");
@@ -905,29 +1029,71 @@ function renderPredictionsUI(payload) {
   const elNote = document.getElementById("pred-balance-note");
 
   if (elBal) elBal.innerText = toMoney(balance);
-  if (elInc) elInc.innerText = toMoney(income);
-  if (elExp) elExp.innerText = toMoney(expense);
-  if (elCount) elCount.innerText = `${pred.length} itens`;
-  if (elNote) elNote.innerText = `para ${horizonDays || pred.length} dias`;
 
+  if (isDaily) {
+    if (elInc) elInc.innerText = "—";
+    if (elExp) elExp.innerText = "—";
+    if (elNote) elNote.innerText = `saldo líquido previsto (modo diário) • ${horizon || pred.length} dia(s)`;
+  } else {
+    if (elInc) elInc.innerText = toMoney(income);
+    if (elExp) elExp.innerText = toMoney(expense);
+    if (elNote) elNote.innerText = `para ${horizon || pred.length} período(s)`;
+  }
+
+  if (elCount) elCount.innerText = `${pred.length} itens`;
+
+  // ----------------------------
   // Risco (heurística)
-  const risk = computeRiskFromPred(pred);
+  // ----------------------------
+  const computeRiskDaily = (rows) => {
+    const nets = rows.map(r => num(r?.net_pred));
+    const negDays = nets.filter(v => v < 0).length;
+
+    // Oscilação: conta dias com |net| muito acima da mediana de |net|
+    const absNets = nets.map(v => Math.abs(v)).filter(v => v > 0);
+    const median = (() => {
+      if (!absNets.length) return 0;
+      const s = [...absNets].sort((a, b) => a - b);
+      const m = Math.floor(s.length / 2);
+      return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+    })();
+    const swingThreshold = median > 0 ? 1.8 * median : 0;
+    const highSwingDays = swingThreshold > 0 ? absNets.filter(v => v >= swingThreshold).length : 0;
+
+    let level = "Baixo";
+    if (negDays >= 3 || highSwingDays >= 3) level = "Alto";
+    else if (negDays >= 1 || highSwingDays >= 1) level = "Médio";
+
+    return {
+      level,
+      count: negDays + highSwingDays,
+      negDays,
+      highExpDays: 0, // compatibilidade com UI (não faz sentido no modo net)
+      highSwingDays
+    };
+  };
+
+  const risk = isDaily ? computeRiskDaily(pred) : computeRiskFromPred(pred);
   if (elRisk) elRisk.innerText = `${risk.level} (${risk.count})`;
 
+  // ----------------------------
   // Alertas
+  // ----------------------------
   const alertsBox = document.getElementById("pred-alerts");
   if (alertsBox) {
     const items = [];
 
     if (risk.negDays > 0) {
       items.push({
-        title: "Saldo diário negativo previsto",
-        text: `${risk.negDays} dia(s) com saldo líquido abaixo de zero.`,
+        title: "Saldo previsto negativo",
+        text: `${risk.negDays} dia(s) com saldo líquido abaixo de zero no horizonte.`,
         icon: "fa-triangle-exclamation",
         cls: "bg-amber-50 border-amber-200 text-amber-900"
       });
     }
-    if (risk.highExpDays > 0) {
+
+    // No modo mensal, mantém pico de despesa. No diário, troca por oscilação.
+    if (!isDaily && risk.highExpDays > 0) {
       items.push({
         title: "Picos de despesa",
         text: `${risk.highExpDays} dia(s) com despesa acima do padrão recente.`,
@@ -935,10 +1101,20 @@ function renderPredictionsUI(payload) {
         cls: "bg-rose-50 border-rose-200 text-rose-900"
       });
     }
+
+    if (isDaily && risk.highSwingDays > 0) {
+      items.push({
+        title: "Oscilações fortes no saldo",
+        text: `${risk.highSwingDays} dia(s) com variação de saldo bem acima do padrão do próprio horizonte.`,
+        icon: "fa-wave-square",
+        cls: "bg-indigo-50 border-indigo-200 text-indigo-900"
+      });
+    }
+
     if (items.length === 0) {
       items.push({
         title: "Sem alertas críticos",
-        text: "Nada gritante no horizonte. Continue monitorando.",
+        text: "Nada crítico no horizonte. Continue monitorando.",
         icon: "fa-circle-check",
         cls: "bg-emerald-50 border-emerald-200 text-emerald-900"
       });
@@ -955,15 +1131,27 @@ function renderPredictionsUI(payload) {
     `).join("");
   }
 
+  // ----------------------------
   // Ações
+  // ----------------------------
   const actionsBox = document.getElementById("pred-actions");
   if (actionsBox) {
     const acts = [];
 
     acts.push("Revise despesas recorrentes (assinaturas) e corte o que não usa.");
-    if (risk.level !== "Baixo") acts.push("Defina teto diário de gasto até o período estabilizar.");
-    acts.push("Antecipe contas com vencimento no horizonte para evitar juros.");
-    acts.push("Se houver pico previsto, planeje uma ‘semana de contenção’.");
+
+    if (risk.level !== "Baixo") {
+      acts.push("Defina um teto diário de gasto até o período estabilizar.");
+      acts.push("Se houver dias negativos previstos, antecipe recebíveis ou reprograme pagamentos.");
+    }
+
+    if (isDaily) {
+      acts.push("Evite comprometer o saldo com compras parceladas no curto prazo (efeito bola de neve é antigo e conhecido).");
+      if (risk.highSwingDays > 0) acts.push("Planeje uma ‘semana de contenção’ para reduzir volatilidade do caixa.");
+    } else {
+      acts.push("Antecipe contas com vencimento no horizonte para evitar juros.");
+      acts.push("Se houver pico previsto, planeje uma ‘semana de contenção’.");
+    }
 
     actionsBox.innerHTML = acts.map(t => `
       <div class="p-3 rounded-xl border border-slate-200 bg-slate-50 flex gap-3 items-start">
@@ -973,41 +1161,58 @@ function renderPredictionsUI(payload) {
     `).join("");
   }
 
+  // ----------------------------
   // Detalhamento
+  // ----------------------------
   const list = document.getElementById("pred-list");
   if (list) {
     if (!pred.length) {
       list.innerHTML = `<div class="p-6 text-sm text-slate-400">Sem dados previstos.</div>`;
     } else {
       const rows = [...pred].slice(0, 120); // limite visual
+
       list.innerHTML = rows.map(r => {
-        const date = r.date || r.ym || "—";
-        const incD = Number(r.income_pred ?? r.income ?? 0);
-        const expD = Number(r.expense_pred ?? r.expense ?? r.expense_total ?? 0);
-        const netD = incD - expD;
+        const rawDate = r?.date || r?.ym || "—";
 
-        const dtLabel = (/^\d{4}-\d{2}-\d{2}$/.test(date))
-          ? new Date(date + "T00:00:00").toLocaleDateString("pt-BR")
-          : date;
+        const dtLabel = (/^\d{4}-\d{2}-\d{2}$/.test(rawDate))
+          ? new Date(rawDate + "T00:00:00").toLocaleDateString("pt-BR")
+          : rawDate;
 
-        return `
-          <div class="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
-            <div>
-              <div class="text-sm font-bold text-slate-800">${safeText(dtLabel)}</div>
-              <div class="text-xs text-slate-500">Receita: ${toMoney(incD)} • Despesa: ${toMoney(expD)}</div>
+        if (isDaily) {
+          const netD = num(r?.net_pred);
+          return `
+            <div class="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
+              <div>
+                <div class="text-sm font-bold text-slate-800">${safeText(dtLabel)}</div>
+                <div class="text-xs text-slate-500">Saldo líquido previsto</div>
+              </div>
+              <div class="text-sm font-bold ${netD < 0 ? "text-rose-600" : "text-emerald-600"}">
+                ${netD < 0 ? "-" : "+"} ${toMoney(Math.abs(netD))}
+              </div>
             </div>
-            <div class="text-sm font-bold ${netD < 0 ? "text-rose-600" : "text-emerald-600"}">
-              ${netD < 0 ? "-" : "+"} ${toMoney(Math.abs(netD))}
+          `;
+        } else {
+          const incD = num(r?.income_pred ?? r?.income ?? 0);
+          const expD = num(r?.expense_pred ?? r?.expense ?? r?.expense_total ?? 0);
+          const netD = incD - expD;
+
+          return `
+            <div class="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
+              <div>
+                <div class="text-sm font-bold text-slate-800">${safeText(dtLabel)}</div>
+                <div class="text-xs text-slate-500">Receita: ${toMoney(incD)} • Despesa: ${toMoney(expD)}</div>
+              </div>
+              <div class="text-sm font-bold ${netD < 0 ? "text-rose-600" : "text-emerald-600"}">
+                ${netD < 0 ? "-" : "+"} ${toMoney(Math.abs(netD))}
+              </div>
             </div>
-          </div>
-        `;
+          `;
+        }
       }).join("");
     }
   }
-
-  // Charts
-  renderPredictionsCharts(payload);
 }
+
 
 async function runPredictions() {
   const btn = document.getElementById("btn-run-pred");
