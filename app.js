@@ -1,3 +1,5 @@
+"use strict";
+
 // ==========================================================
 // CONFIG
 // ==========================================================
@@ -8,6 +10,8 @@ const DEFAULT_API_BASE = "https://viniciuskhan-financeai.hf.space";
 const API_BASE = (localStorage.getItem("FINANCEAI_API_BASE") || DEFAULT_API_BASE)
   .trim()
   .replace(/\/+$/, "");
+
+window.FINANCEAI_API_BASE = API_BASE;
 
 // ==========================================================
 // ESTADO LOCAL (frontend)
@@ -33,6 +37,10 @@ const state = {
     timeseries: null,
     categories: null,
     cardCategories: null,
+
+    // Predictions
+    predFlow: null,
+    predCats: null,
   },
 
   // Relatórios
@@ -41,13 +49,11 @@ const state = {
     lastHtml: "",
   },
 
-  // Exportações
-  exports: {
-    lastYm: "",
-    lastJsonObj: null,     // objeto retornado em fmt=json
-    lastJsonText: "",      // string JSON formatada
-    lastCsvText: "",       // fallback (quando fetch não usar blob)
-  },
+  // Cache predição (última)
+  predictions: {
+    lastPayload: null,
+    lastRunAt: null,
+  }
 };
 
 // ==========================================================
@@ -66,11 +72,10 @@ function showToast(title, msg, ms = 3500) {
   clearTimeout(showToast._t);
   showToast._t = setTimeout(() => box.classList.add("hidden"), ms);
 }
-// Alias (caso você use "toast" em algum lugar)
 window.toast = showToast;
 
 // ==========================================================
-// HELPERS (datas, texto seguro, dinheiro)
+// HELPERS
 // ==========================================================
 function monthLabel(date) {
   const year = date.getFullYear();
@@ -95,7 +100,6 @@ function safeText(s) {
   }[c]));
 }
 
-// Sanitização simples (não substitui DOMPurify, mas corta o básico de XSS)
 function sanitizeHtml(html) {
   const s = String(html ?? "");
   return s
@@ -112,11 +116,8 @@ function setDisabled(el, disabled) {
   el.classList.toggle("cursor-not-allowed", !!disabled);
 }
 
-function parseContentDispositionFilename(cd) {
-  // Ex.: attachment; filename="financeai_2025-12_export.csv"
-  if (!cd) return "";
-  const m = /filename\*?=(?:UTF-8''|")?([^";]+)"?/i.exec(cd);
-  return m ? decodeURIComponent(m[1]) : "";
+function destroyChart(inst) {
+  if (inst && typeof inst.destroy === "function") inst.destroy();
 }
 
 // ==========================================================
@@ -140,10 +141,12 @@ async function api(path, options = {}) {
   } catch (e) {
     clearTimeout(timeoutId);
     const isAbort = (e && e.name === "AbortError");
-    throw new Error(isAbort
+    const err = new Error(isAbort
       ? "Timeout ao acessar o backend. Verifique o servidor/API_BASE."
-      : "Falha de rede/CORS ao acessar o backend. Verifique API_BASE e o servidor."
+      : "Falha de rede/CORS ao acessar o backend. Verifique API_BASE e o servidor (e evite abrir via file://)."
     );
+    err.status = 0;
+    throw err;
   } finally {
     clearTimeout(timeoutId);
   }
@@ -156,58 +159,14 @@ async function api(path, options = {}) {
     } catch {
       try { detail = await resp.text(); } catch { detail = ""; }
     }
-    throw new Error(detail || `Erro HTTP ${resp.status}`);
+    const err = new Error(detail || `Erro HTTP ${resp.status}`);
+    err.status = resp.status;
+    throw err;
   }
 
-  // Robusto: se não for JSON, devolve texto
   const text = await resp.text();
   if (!text) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
-}
-
-// Download como BLOB (ideal para CSV do /reports/export)
-async function apiBlob(path, options = {}) {
-  const url = `${API_BASE}${path}`;
-  const headers = { ...(options.headers || {}) };
-
-  const controller = new AbortController();
-  const timeoutMs = Number(options.timeoutMs || 20000);
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  let resp;
-  try {
-    resp = await fetch(url, { ...options, headers, signal: controller.signal });
-  } catch (e) {
-    clearTimeout(timeoutId);
-    const isAbort = (e && e.name === "AbortError");
-    throw new Error(isAbort
-      ? "Timeout ao baixar arquivo. Verifique o backend."
-      : "Falha de rede/CORS ao baixar arquivo. Verifique API_BASE e o servidor."
-    );
-  } finally {
-    clearTimeout(timeoutId);
-  }
-
-  if (!resp.ok) {
-    let detail = "";
-    try {
-      const j = await resp.json();
-      detail = j.detail || JSON.stringify(j);
-    } catch {
-      try { detail = await resp.text(); } catch { detail = ""; }
-    }
-    throw new Error(detail || `Erro HTTP ${resp.status}`);
-  }
-
-  const blob = await resp.blob();
-  const cd = resp.headers.get("content-disposition") || "";
-  const filename = parseContentDispositionFilename(cd);
-
-  return { blob, filename, contentType: resp.headers.get("content-type") || "" };
+  try { return JSON.parse(text); } catch { return text; }
 }
 
 // ==========================================================
@@ -227,24 +186,22 @@ async function loadCategories() {
   state.categories = await api("/categories");
 }
 
-async function loadTransactionsForCurrentMonth() {
-  const { year, month } = monthLabel(state.currentDate);
-  // CAIXA (transactions) inclui pagamentos (impactam saldo da conta)
-  state.transactions = await api(`/transactions?year=${year}&month=${month + 1}&limit=2000`);
-}
-
-async function loadCombinedForCurrentMonth() {
-  const { year, month } = monthLabel(state.currentDate);
-  // COMPETÊNCIA: cash + card_purchases (cartão entra pelo invoice_ym; sem dupla contagem)
-  state.combinedTransactions = await api(`/transactions/combined?year=${year}&month=${month + 1}&limit=5000`);
-  state.summaryCombined = await api(`/summary/combined?year=${year}&month=${month + 1}`);
-}
-
 async function loadCards() {
   state.cards = await api("/cards");
   if (!state.selectedCardId && state.cards.length > 0) {
     state.selectedCardId = state.cards[0].id;
   }
+}
+
+async function loadTransactionsForCurrentMonth() {
+  const { year, month } = monthLabel(state.currentDate);
+  state.transactions = await api(`/transactions?year=${year}&month=${month + 1}&limit=2000`);
+}
+
+async function loadCombinedForCurrentMonth() {
+  const { year, month } = monthLabel(state.currentDate);
+  state.combinedTransactions = await api(`/transactions/combined?year=${year}&month=${month + 1}&limit=5000`);
+  state.summaryCombined = await api(`/summary/combined?year=${year}&month=${month + 1}`);
 }
 
 async function refreshAll() {
@@ -257,22 +214,23 @@ async function refreshAll() {
     await reloadCharts();
     await renderCreditControls();
 
-    // Relatórios: auto-render se a tela estiver aberta
+    // se estiver na aba de relatórios, atualiza preview
     const reportsView = document.getElementById("view-reports");
     if (reportsView && !reportsView.classList.contains("hidden")) {
-      await generateAndRenderReport();
+      await window.generateAndRenderReport?.();
     }
 
-    // Exportações: auto-preview se a tela estiver aberta
-    const exportsView = document.getElementById("view-exports");
-    if (exportsView && !exportsView.classList.contains("hidden")) {
-      await generateAndRenderExportPreview();
+    // se estiver na aba de predições e já rodou antes, re-renderiza
+    const predView = document.getElementById("view-predictions");
+    if (predView && !predView.classList.contains("hidden") && state.predictions.lastPayload) {
+      renderPredictionsUI(state.predictions.lastPayload);
     }
   } catch (e) {
     console.error(e);
-    showToast("Erro", e.message || String(e));
+    showToast("Erro", e.message || String(e), 6000);
   }
 }
+window.refreshAll = refreshAll;
 
 // ==========================================================
 // RENDERERS
@@ -283,10 +241,10 @@ function renderAll() {
   renderDashboard();
   renderCreditCardsList();
   hydrateCreditSelects();
+  hydratePredictionsSelects();
 }
 
 function renderAccounts() {
-  // Select in Form
   const select = document.getElementById("tx-account");
   if (select) {
     if (state.accounts.length > 0) {
@@ -298,7 +256,6 @@ function renderAccounts() {
     }
   }
 
-  // Pay invoice account select
   const payAcc = document.getElementById("pay-account");
   if (payAcc) {
     payAcc.innerHTML = state.accounts.length
@@ -306,7 +263,6 @@ function renderAccounts() {
       : `<option value="">Sem contas</option>`;
   }
 
-  // Settings List
   const list = document.getElementById("settings-accounts-list");
   if (list) {
     list.innerHTML = state.accounts
@@ -330,7 +286,6 @@ function renderAccounts() {
       .join("");
   }
 
-  // Dashboard Cards (saldo por conta) — CAIXA (inclui pagamento de fatura)
   const cardsContainer = document.getElementById("accounts-cards-container");
   if (!cardsContainer) return;
 
@@ -376,16 +331,11 @@ function renderAccounts() {
 function renderCategories() {
   const select = document.getElementById("tx-category");
   if (select) {
-    if (state.categories.length > 0) {
-      select.innerHTML = state.categories
-        .map(cat => `<option value="${safeText(cat.name)}">${safeText(cat.name)}</option>`)
-        .join("");
-    } else {
-      select.innerHTML = `<option value="Geral">Geral</option>`;
-    }
+    select.innerHTML = state.categories.length > 0
+      ? state.categories.map(cat => `<option value="${safeText(cat.name)}">${safeText(cat.name)}</option>`).join("")
+      : `<option value="Geral">Geral</option>`;
   }
 
-  // Purchase category
   const pc = document.getElementById("purchase-category");
   if (pc) {
     pc.innerHTML = state.categories.length
@@ -413,7 +363,6 @@ function renderDashboard() {
   const monthDisplay = document.getElementById("current-month-display");
   if (monthDisplay) monthDisplay.innerText = label;
 
-  // KPIs por competência (sem dupla contagem do cartão)
   const sc = state.summaryCombined;
   const inc = sc ? Number(sc.income || 0) : 0;
   const exp = sc ? Number(sc.expense_total || 0) : 0;
@@ -433,7 +382,6 @@ function renderDashboard() {
   const list = document.getElementById("transactions-list");
   if (!list) return;
 
-  // Extrato do mês por competência: cash + card
   const rows = Array.isArray(state.combinedTransactions) ? state.combinedTransactions : [];
 
   if (rows.length === 0) {
@@ -449,57 +397,52 @@ function renderDashboard() {
     (a, b) => (b.date || "").localeCompare(a.date || "") || (Number(b.id) - Number(a.id))
   );
 
-  list.innerHTML = sorted
-    .map(t => {
-      const source = t.source || "cash"; // 'cash'|'card'
-      const isCard = source === "card";
+  list.innerHTML = sorted.map(t => {
+    const source = t.source || "cash"; // 'cash'|'card'
+    const isCard = source === "card";
+    const isExp = isCard ? true : (t.type === "expense");
+    const icon = isCard ? "fa-credit-card" : (isExp ? "fa-arrow-down" : "fa-arrow-up");
+    const badge = isCard
+      ? `<span class="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 font-bold">CARTÃO</span>`
+      : `<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-bold">CAIXA</span>`;
 
-      // Para card_purchase, tratar como despesa
-      const isExp = isCard ? true : (t.type === "expense");
-      const icon = isCard ? "fa-credit-card" : (isExp ? "fa-arrow-down" : "fa-arrow-up");
+    const cat = safeText(t.category || "Geral");
+    const dt = t.date ? new Date(t.date + "T00:00:00").toLocaleDateString("pt-BR") : "-";
 
-      const badge = isCard
-        ? `<span class="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 font-bold">CARTÃO</span>`
-        : `<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-bold">CAIXA</span>`;
+    const onDelete = isCard
+      ? `deleteCardPurchase(${Number(t.id)})`
+      : `deleteTransaction(${Number(t.id)})`;
 
-      const cat = safeText(t.category || "Geral");
-      const dt = t.date ? new Date(t.date + "T00:00:00").toLocaleDateString("pt-BR") : "-";
+    const amount = Number(t.amount || 0);
 
-      const onDelete = isCard
-        ? `deleteCardPurchase(${Number(t.id)})`
-        : `deleteTransaction(${Number(t.id)})`;
-
-      const amount = Number(t.amount || 0);
-
-      return `
-        <div class="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors group">
-          <div class="flex items-center gap-4">
-            <div class="w-10 h-10 rounded-xl ${isExp ? "bg-rose-100 text-rose-600" : "bg-emerald-100 text-emerald-600"} flex items-center justify-center text-lg">
-              <i class="fas ${icon}"></i>
-            </div>
-            <div>
-              <p class="font-bold text-slate-800 text-sm">${safeText(t.description || "")}</p>
-              <div class="flex items-center gap-2 text-xs text-slate-400 mt-1">
-                <span>${dt}</span>
-                <span class="w-1 h-1 rounded-full bg-slate-300"></span>
-                <span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">${cat}</span>
-                <span class="w-1 h-1 rounded-full bg-slate-300"></span>
-                ${badge}
-              </div>
+    return `
+      <div class="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors group">
+        <div class="flex items-center gap-4">
+          <div class="w-10 h-10 rounded-xl ${isExp ? "bg-rose-100 text-rose-600" : "bg-emerald-100 text-emerald-600"} flex items-center justify-center text-lg">
+            <i class="fas ${icon}"></i>
+          </div>
+          <div>
+            <p class="font-bold text-slate-800 text-sm">${safeText(t.description || "")}</p>
+            <div class="flex items-center gap-2 text-xs text-slate-400 mt-1">
+              <span>${dt}</span>
+              <span class="w-1 h-1 rounded-full bg-slate-300"></span>
+              <span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">${cat}</span>
+              <span class="w-1 h-1 rounded-full bg-slate-300"></span>
+              ${badge}
             </div>
           </div>
-          <div class="text-right">
-            <p class="font-bold text-sm ${isExp ? "text-rose-600" : "text-emerald-600"}">
-              ${isExp ? "- " : "+ "}${toMoney(amount)}
-            </p>
-            <button onclick="${onDelete}"
-              class="text-xs text-red-500 opacity-0 group-hover:opacity-100 hover:underline mt-1">
-              Excluir
-            </button>
-          </div>
-        </div>`;
-    })
-    .join("");
+        </div>
+        <div class="text-right">
+          <p class="font-bold text-sm ${isExp ? "text-rose-600" : "text-emerald-600"}">
+            ${isExp ? "- " : "+ "}${toMoney(amount)}
+          </p>
+          <button onclick="${onDelete}"
+            class="text-xs text-red-500 opacity-0 group-hover:opacity-100 hover:underline mt-1">
+            Excluir
+          </button>
+        </div>
+      </div>`;
+  }).join("");
 }
 
 // ===== Credit card render =====
@@ -518,8 +461,9 @@ function renderCreditCardsList() {
   container.innerHTML = state.cards.map(c => {
     const active = (Number(c.id) === Number(state.selectedCardId));
     return `
-      <button onclick="selectCard(${c.id})"
-        class="w-full text-left p-4 rounded-2xl border ${active ? "border-blue-200 bg-blue-50" : "border-slate-200 bg-white hover:bg-slate-50"} transition-colors">
+      <div role="button" tabindex="0"
+        onclick="selectCard(${c.id})"
+        class="w-full text-left p-4 rounded-2xl border ${active ? "border-blue-200 bg-blue-50" : "border-slate-200 bg-white hover:bg-slate-50"} transition-colors cursor-pointer">
         <div class="flex items-start justify-between gap-3">
           <div>
             <p class="text-[10px] font-bold uppercase ${active ? "text-blue-700" : "text-slate-400"} tracking-wider">${safeText(c.bank)}</p>
@@ -534,7 +478,7 @@ function renderCreditCardsList() {
             <i class="fas fa-trash"></i>
           </button>
         </div>
-      </button>
+      </div>
     `;
   }).join("");
 }
@@ -562,7 +506,6 @@ async function renderCreditControls() {
     invYmInput.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   }
 
-  // Sempre sincroniza o campo do modal de pagamento com a competência selecionada
   const payYm = document.getElementById("pay-invoice-ym");
   if (payYm && invYmInput && invYmInput.value) {
     payYm.value = invYmInput.value;
@@ -576,12 +519,8 @@ async function renderCreditControls() {
 }
 
 // ==========================================================
-// CHARTS (competência; sem dupla contagem)
+// CHARTS (Dashboard)
 // ==========================================================
-function destroyChart(inst) {
-  if (inst && typeof inst.destroy === "function") inst.destroy();
-}
-
 async function reloadCharts() {
   await Promise.all([renderTimeseriesChart(), renderCategoriesChart()]);
 }
@@ -598,14 +537,12 @@ async function renderTimeseriesChart() {
 
   const { year, month } = monthLabel(state.currentDate);
 
-  // 1) income diário vem do cash timeseries (já exclui pagamento de fatura por padrão no backend)
-  // 2) expense_total diário vem do combined timeseries (cash expenses + card purchases por competência)
   const [cash, comb] = await Promise.all([
     api(`/charts/timeseries?year=${year}&month=${month+1}`),
     api(`/charts/combined/timeseries?year=${year}&month=${month+1}`),
   ]);
 
-  const map = new Map(); // date -> {income, expense_total}
+  const map = new Map();
   (cash || []).forEach(d => {
     const k = d.date;
     if (!map.has(k)) map.set(k, { income: 0, expense_total: 0 });
@@ -657,8 +594,6 @@ async function renderCategoriesChart() {
   }
 
   const { year, month } = monthLabel(state.currentDate);
-
-  // Categorias por competência: cash expenses (sem pagamento) + card purchases
   const data = await api(`/charts/combined/categories?year=${year}&month=${month+1}`);
 
   const labels = (data || []).map(d => d.category);
@@ -712,13 +647,11 @@ function renderCardCategoryChart(purchases) {
 }
 
 // ==========================================================
-// UI Actions / Nav (Desktop + Mobile)
+// NAV (Desktop + Mobile) - ALINHADO AO TEU HTML
 // ==========================================================
 function setActiveNav(view) {
-  // ADIÇÃO: "exports" (tela abaixo de Relatórios)
-  const ids = ["dashboard", "credit", "settings", "reports", "exports"];
+  const ids = ["dashboard", "predictions", "credit", "settings", "reports"];
 
-  // Desktop nav
   ids.forEach(id => {
     const el = document.getElementById(`nav-${id}`);
     if (!el) return;
@@ -731,7 +664,6 @@ function setActiveNav(view) {
       "w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg bg-blue-50 text-blue-700 transition-colors border border-blue-100";
   }
 
-  // Mobile nav
   ids.forEach(id => {
     const m = document.getElementById(`mnav-${id}`);
     if (!m) return;
@@ -743,8 +675,7 @@ function setActiveNav(view) {
 }
 
 window.switchView = async (v) => {
-  // ADIÇÃO: exports
-  ["dashboard","credit","settings","reports","exports"].forEach(id => {
+  ["dashboard","predictions","credit","settings","reports"].forEach(id => {
     const el = document.getElementById(`view-${id}`);
     if (el) el.classList.add("hidden");
   });
@@ -756,9 +687,11 @@ window.switchView = async (v) => {
 
   try {
     if (v === "dashboard") await reloadCharts();
-    if (v === "credit") await loadCardsAndRender();
-    if (v === "reports") await generateAndRenderReport();
-    if (v === "exports") await generateAndRenderExportPreview();
+    if (v === "credit") await window.loadCardsAndRender?.();
+    if (v === "reports") await window.generateAndRenderReport?.();
+    if (v === "predictions" && state.predictions.lastPayload) {
+      renderPredictionsUI(state.predictions.lastPayload);
+    }
   } catch (e) {
     console.error(e);
     showToast("Erro", e.message || String(e));
@@ -774,13 +707,15 @@ window.toggleModal = (id) => {
   if (el) el.classList.toggle("hidden");
 };
 
+// ==========================================================
+// DASHBOARD ACTIONS
+// ==========================================================
 window.setTxType = (type) => {
   const txType = document.getElementById("tx-type");
   if (txType) txType.value = type;
 
   const btnE = document.getElementById("btn-expense");
   const btnI = document.getElementById("btn-income");
-
   if (!btnE || !btnI) return;
 
   if (type === "expense") {
@@ -801,16 +736,9 @@ window.filterDate = async (d) => {
     renderAll();
     await reloadCharts();
 
-    // Atualiza relatório se estiver aberto
     const reportsView = document.getElementById("view-reports");
     if (reportsView && !reportsView.classList.contains("hidden")) {
-      await generateAndRenderReport();
-    }
-
-    // Atualiza export preview se estiver aberto
-    const exportsView = document.getElementById("view-exports");
-    if (exportsView && !exportsView.classList.contains("hidden")) {
-      await generateAndRenderExportPreview();
+      await window.generateAndRenderReport?.();
     }
   } catch (e) {
     console.error(e);
@@ -818,19 +746,307 @@ window.filterDate = async (d) => {
   }
 };
 
-// Credit events
-window.selectCard = async (id) => {
-  state.selectedCardId = Number(id);
-  renderCreditCardsList();
-  await loadInvoice();
-};
+// ==========================================================
+// PREDICTIONS (NOVA ABA) - IDs pred-* do teu HTML
+// ==========================================================
+function hydratePredictionsSelects() {
+  const accSel = document.getElementById("pred-account");
+  if (!accSel) return;
 
-window.loadCardsAndRender = async () => {
-  await loadCards();
-  renderCreditCardsList();
-  hydrateCreditSelects();
-  await loadInvoice();
-};
+  accSel.innerHTML = state.accounts.length
+    ? state.accounts.map(a => `<option value="${a.id}">${safeText(a.name)} (${safeText(a.bank)})</option>`).join("")
+    : `<option value="">Sem contas</option>`;
+
+  const scope = document.getElementById("pred-scope");
+  if (scope) {
+    const v = scope.value || "all";
+    accSel.classList.toggle("hidden", v !== "account");
+  }
+}
+
+function setPredMeta(text) {
+  const el = document.getElementById("pred-meta");
+  if (el) el.innerText = text;
+}
+
+function predSum(arr, key) {
+  return (arr || []).reduce((acc, r) => acc + Number(r?.[key] || 0), 0);
+}
+
+function computeRiskFromPred(predRows) {
+  // Heurística simples: conta dias com net muito negativo e dias com despesa acima do percentil "alto"
+  const nets = (predRows || []).map(r => Number(r.net_pred ?? r.net ?? (Number(r.income_pred || 0) - Number(r.expense_pred || 0))));
+  const exps = (predRows || []).map(r => Number(r.expense_pred ?? r.expense ?? 0));
+
+  if (!nets.length) return { level: "—", count: 0 };
+
+  const sortedExp = [...exps].sort((a,b) => a-b);
+  const p80 = sortedExp[Math.floor(0.8 * (sortedExp.length-1))] || 0;
+
+  let negDays = 0;
+  let highExpDays = 0;
+  for (let i=0; i<nets.length; i++) {
+    if (nets[i] < 0) negDays++;
+    if (exps[i] > p80 && p80 > 0) highExpDays++;
+  }
+
+  const count = negDays + highExpDays;
+  let level = "Baixo";
+  if (count >= 6) level = "Alto";
+  else if (count >= 3) level = "Médio";
+
+  return { level, count, negDays, highExpDays };
+}
+
+function renderPredictionsCharts(payload) {
+  if (typeof Chart === "undefined") {
+    showToast("Predições", "Chart.js não carregou.");
+    return;
+  }
+
+  const flowCanvas = document.getElementById("chart-pred-flow");
+  const catCanvas = document.getElementById("chart-pred-categories");
+
+  const hist = Array.isArray(payload?.history) ? payload.history : [];
+  const pred = Array.isArray(payload?.predictions) ? payload.predictions : [];
+
+  // ---------- Flow (hist + pred) ----------
+  if (flowCanvas) {
+    const labels = [
+      ...hist.map(r => r.date || r.ym),
+      ...pred.map(r => r.date || r.ym)
+    ].filter(Boolean);
+
+    const fmtLabel = (x) => {
+      if (!x) return "";
+      if (/^\d{4}-\d{2}-\d{2}$/.test(x)) return new Date(x + "T00:00:00").toLocaleDateString("pt-BR");
+      return x;
+    };
+
+    const incomeSeries = [
+      ...hist.map(r => Number(r.income || 0)),
+      ...pred.map(r => Number(r.income_pred ?? r.income ?? 0)),
+    ];
+
+    const expenseSeries = [
+      ...hist.map(r => Number(r.expense ?? r.expense_total ?? 0)),
+      ...pred.map(r => Number(r.expense_pred ?? r.expense ?? r.expense_total ?? 0)),
+    ];
+
+    destroyChart(state.charts.predFlow);
+    state.charts.predFlow = new Chart(flowCanvas, {
+      type: "line",
+      data: {
+        labels: labels.map(fmtLabel),
+        datasets: [
+          { label: "Receitas", data: incomeSeries, tension: 0.25 },
+          { label: "Despesas", data: expenseSeries, tension: 0.25 },
+        ],
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { display: true },
+          tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${toMoney(ctx.parsed.y)}` } }
+        },
+        scales: { y: { ticks: { callback: (v) => toMoney(v) } } },
+      }
+    });
+  }
+
+  // ---------- Categories provável (heurística local) ----------
+  if (catCanvas) {
+    // usa o histórico recente do mês corrente para estimar “top categorias”
+    const lastCats = {};
+    const rows = Array.isArray(state.combinedTransactions) ? state.combinedTransactions : [];
+    rows.forEach(r => {
+      const isExpense = (r.source === "card") || (r.type === "expense");
+      if (!isExpense) return;
+      const cat = r.category || "Geral";
+      lastCats[cat] = (lastCats[cat] || 0) + Number(r.amount || 0);
+    });
+
+    const top = Object.entries(lastCats)
+      .sort((a,b) => b[1] - a[1])
+      .slice(0, 8);
+
+    const labels = top.map(x => x[0]);
+    const totals = top.map(x => x[1]);
+
+    destroyChart(state.charts.predCats);
+    state.charts.predCats = new Chart(catCanvas, {
+      type: "doughnut",
+      data: { labels, datasets: [{ data: totals }] },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { display: true, position: "bottom" },
+          tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${toMoney(ctx.parsed)}` } }
+        },
+      }
+    });
+  }
+}
+
+function renderPredictionsUI(payload) {
+  const pred = Array.isArray(payload?.predictions) ? payload.predictions : [];
+  const horizonDays = pred.length || Number(document.getElementById("pred-horizon")?.value || 0);
+
+  // KPIs
+  const income = predSum(pred, "income_pred") || predSum(pred, "income");
+  const expense = predSum(pred, "expense_pred") || predSum(pred, "expense") || predSum(pred, "expense_total");
+  const balance = income - expense;
+
+  const elBal = document.getElementById("pred-balance");
+  const elInc = document.getElementById("pred-income");
+  const elExp = document.getElementById("pred-expense");
+  const elRisk = document.getElementById("pred-risk");
+  const elCount = document.getElementById("pred-count");
+  const elNote = document.getElementById("pred-balance-note");
+
+  if (elBal) elBal.innerText = toMoney(balance);
+  if (elInc) elInc.innerText = toMoney(income);
+  if (elExp) elExp.innerText = toMoney(expense);
+  if (elCount) elCount.innerText = `${pred.length} itens`;
+  if (elNote) elNote.innerText = `para ${horizonDays || pred.length} dias`;
+
+  // Risco (heurística)
+  const risk = computeRiskFromPred(pred);
+  if (elRisk) elRisk.innerText = `${risk.level} (${risk.count})`;
+
+  // Alertas
+  const alertsBox = document.getElementById("pred-alerts");
+  if (alertsBox) {
+    const items = [];
+
+    if (risk.negDays > 0) {
+      items.push({
+        title: "Saldo diário negativo previsto",
+        text: `${risk.negDays} dia(s) com saldo líquido abaixo de zero.`,
+        icon: "fa-triangle-exclamation",
+        cls: "bg-amber-50 border-amber-200 text-amber-900"
+      });
+    }
+    if (risk.highExpDays > 0) {
+      items.push({
+        title: "Picos de despesa",
+        text: `${risk.highExpDays} dia(s) com despesa acima do padrão recente.`,
+        icon: "fa-fire",
+        cls: "bg-rose-50 border-rose-200 text-rose-900"
+      });
+    }
+    if (items.length === 0) {
+      items.push({
+        title: "Sem alertas críticos",
+        text: "Nada gritante no horizonte. Continue monitorando.",
+        icon: "fa-circle-check",
+        cls: "bg-emerald-50 border-emerald-200 text-emerald-900"
+      });
+    }
+
+    alertsBox.innerHTML = items.map(a => `
+      <div class="p-3 rounded-xl border ${a.cls} flex gap-3 items-start">
+        <i class="fas ${a.icon} mt-0.5"></i>
+        <div>
+          <div class="font-bold text-sm">${safeText(a.title)}</div>
+          <div class="text-xs opacity-80">${safeText(a.text)}</div>
+        </div>
+      </div>
+    `).join("");
+  }
+
+  // Ações
+  const actionsBox = document.getElementById("pred-actions");
+  if (actionsBox) {
+    const acts = [];
+
+    acts.push("Revise despesas recorrentes (assinaturas) e corte o que não usa.");
+    if (risk.level !== "Baixo") acts.push("Defina teto diário de gasto até o período estabilizar.");
+    acts.push("Antecipe contas com vencimento no horizonte para evitar juros.");
+    acts.push("Se houver pico previsto, planeje uma ‘semana de contenção’.");
+
+    actionsBox.innerHTML = acts.map(t => `
+      <div class="p-3 rounded-xl border border-slate-200 bg-slate-50 flex gap-3 items-start">
+        <i class="fas fa-list-check mt-0.5 text-slate-600"></i>
+        <div class="text-sm text-slate-700 font-medium">${safeText(t)}</div>
+      </div>
+    `).join("");
+  }
+
+  // Detalhamento
+  const list = document.getElementById("pred-list");
+  if (list) {
+    if (!pred.length) {
+      list.innerHTML = `<div class="p-6 text-sm text-slate-400">Sem dados previstos.</div>`;
+    } else {
+      const rows = [...pred].slice(0, 120); // limite visual
+      list.innerHTML = rows.map(r => {
+        const date = r.date || r.ym || "—";
+        const incD = Number(r.income_pred ?? r.income ?? 0);
+        const expD = Number(r.expense_pred ?? r.expense ?? r.expense_total ?? 0);
+        const netD = incD - expD;
+
+        const dtLabel = (/^\d{4}-\d{2}-\d{2}$/.test(date))
+          ? new Date(date + "T00:00:00").toLocaleDateString("pt-BR")
+          : date;
+
+        return `
+          <div class="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
+            <div>
+              <div class="text-sm font-bold text-slate-800">${safeText(dtLabel)}</div>
+              <div class="text-xs text-slate-500">Receita: ${toMoney(incD)} • Despesa: ${toMoney(expD)}</div>
+            </div>
+            <div class="text-sm font-bold ${netD < 0 ? "text-rose-600" : "text-emerald-600"}">
+              ${netD < 0 ? "-" : "+"} ${toMoney(Math.abs(netD))}
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+  }
+
+  // Charts
+  renderPredictionsCharts(payload);
+}
+
+async function runPredictions() {
+  const btn = document.getElementById("btn-run-pred");
+  const prev = btn ? btn.innerHTML : "";
+
+  try {
+    if (btn) { btn.innerHTML = "Gerando..."; setDisabled(btn, true); }
+
+    const horizon = Number(document.getElementById("pred-horizon")?.value || 30);
+    const scope = String(document.getElementById("pred-scope")?.value || "all");
+    const accId = scope === "account" ? Number(document.getElementById("pred-account")?.value || 0) : null;
+
+    // Endpoint preferencial: /forecast/daily?days=...
+    // (Se teu backend não tiver, você vai ver erro no toast — aí ajusta o endpoint)
+    const qs = new URLSearchParams();
+    qs.set("days", String(horizon));
+    if (accId) qs.set("account_id", String(accId));
+
+    const payload = await api(`/forecast/daily?${qs.toString()}`, { method: "GET", timeoutMs: 60000 });
+
+    state.predictions.lastPayload = payload;
+    state.predictions.lastRunAt = new Date();
+
+    const meta = `Modelo: ${(payload?.model || payload?.meta?.model || "—")} | Última execução: ${new Date().toLocaleString("pt-BR")}`;
+    setPredMeta(meta);
+
+    renderPredictionsUI(payload);
+    showToast("Predições", "Previsão gerada com sucesso.");
+  } catch (e) {
+    console.error(e);
+    showToast("Predições (erro)", e.message || String(e), 7000);
+    setPredMeta(`Modelo: — | Última execução: erro`);
+  } finally {
+    if (btn) { btn.innerHTML = prev || '<i class="fas fa-wand-magic-sparkles mr-2"></i> Gerar'; setDisabled(btn, false); }
+  }
+}
+
+// expõe para onclick do HTML
+window.forecastLoadUI = runPredictions;
 
 // ==========================================================
 // CRUD: Accounts / Categories / Transactions
@@ -884,57 +1100,6 @@ window.handleSaveCategory = async (e) => {
   await refreshAll();
 };
 
-// transação do caixa (novo lançamento)
-const txForm = document.getElementById("transaction-form");
-if (txForm) {
-  txForm.onsubmit = async (e) => {
-    e.preventDefault();
-    const btn = e.target.querySelector('button[type="submit"]');
-    const prevHtml = btn ? btn.innerHTML : "";
-    if (btn) { btn.innerHTML = "Salvando..."; setDisabled(btn, true); }
-
-    const payload = {
-      type: document.getElementById("tx-type")?.value || "expense",
-      amount: parseFloat(document.getElementById("tx-amount")?.value || "0"),
-      description: document.getElementById("tx-desc")?.value || "",
-      date: document.getElementById("tx-date")?.value || "",
-      account_id: Number(document.getElementById("tx-account")?.value || 0),
-      category: document.getElementById("tx-category")?.value || "Geral",
-    };
-
-    try {
-      await api("/transactions", { method: "POST", body: JSON.stringify(payload) });
-      e.target.reset();
-      const txDate = document.getElementById("tx-date");
-      if (txDate) txDate.valueAsDate = new Date();
-
-      await Promise.all([loadTransactionsForCurrentMonth(), loadCombinedForCurrentMonth()]);
-      renderAll();
-      await reloadCharts();
-
-      // Se relatório aberto, atualiza
-      const reportsView = document.getElementById("view-reports");
-      if (reportsView && !reportsView.classList.contains("hidden")) {
-        await generateAndRenderReport();
-      }
-
-      // Se export aberto, atualiza preview
-      const exportsView = document.getElementById("view-exports");
-      if (exportsView && !exportsView.classList.contains("hidden")) {
-        await generateAndRenderExportPreview();
-      }
-    } catch (e) {
-      console.error(e);
-      showToast("Erro", e.message || String(e));
-    } finally {
-      if (btn) {
-        btn.innerHTML = prevHtml || '<i class="fas fa-save"></i> Salvar Lançamento';
-        setDisabled(btn, false);
-      }
-    }
-  };
-}
-
 // ==========================================================
 // CRUD: Cartões
 // ==========================================================
@@ -942,7 +1107,7 @@ async function deleteCard(id) {
   if (!confirm("Excluir este cartão e suas compras?")) return;
   await api(`/cards/${id}`, { method: "DELETE" });
   if (Number(state.selectedCardId) === Number(id)) state.selectedCardId = null;
-  await loadCardsAndRender();
+  await window.loadCardsAndRender?.();
   await loadCombinedForCurrentMonth();
   renderAll();
   await reloadCharts();
@@ -965,7 +1130,7 @@ window.handleSaveCard = async (e) => {
 
   window.toggleModal("modal-card");
   e.target.reset();
-  await loadCardsAndRender();
+  await window.loadCardsAndRender?.();
 };
 
 window.handleSaveCardPurchase = async (e) => {
@@ -987,20 +1152,10 @@ window.handleSaveCardPurchase = async (e) => {
   const pd = document.getElementById("purchase-date");
   if (pd) pd.valueAsDate = new Date();
 
-  await loadInvoice();
+  await window.loadInvoice?.();
   await loadCombinedForCurrentMonth();
   renderAll();
   await reloadCharts();
-
-  const reportsView = document.getElementById("view-reports");
-  if (reportsView && !reportsView.classList.contains("hidden")) {
-    await generateAndRenderReport();
-  }
-
-  const exportsView = document.getElementById("view-exports");
-  if (exportsView && !exportsView.classList.contains("hidden")) {
-    await generateAndRenderExportPreview();
-  }
 };
 
 window.handlePayInvoice = async (e) => {
@@ -1017,28 +1172,31 @@ window.handlePayInvoice = async (e) => {
   const res = await api("/cards/pay-invoice", { method: "POST", body: JSON.stringify(payload) });
   window.toggleModal("modal-pay-invoice");
 
-  await loadInvoice();
+  await window.loadInvoice?.();
   await Promise.all([loadTransactionsForCurrentMonth(), loadCombinedForCurrentMonth()]);
   renderAll();
   await reloadCharts();
-
-  const reportsView = document.getElementById("view-reports");
-  if (reportsView && !reportsView.classList.contains("hidden")) {
-    await generateAndRenderReport();
-  }
-
-  const exportsView = document.getElementById("view-exports");
-  if (exportsView && !exportsView.classList.contains("hidden")) {
-    await generateAndRenderExportPreview();
-  }
 
   if (res && res.paid_total) alert(`Fatura paga: ${toMoney(res.paid_total)}`);
   else alert("Operação concluída.");
 };
 
 // ==========================================================
-// FATURA (load)
+// FATURA
 // ==========================================================
+window.selectCard = async (id) => {
+  state.selectedCardId = Number(id);
+  renderCreditCardsList();
+  await window.loadInvoice?.();
+};
+
+window.loadCardsAndRender = async () => {
+  await loadCards();
+  renderCreditCardsList();
+  hydrateCreditSelects();
+  await window.loadInvoice?.();
+};
+
 window.loadInvoice = async () => {
   const invInput = document.getElementById("invoice-ym");
   const invoiceYm = invInput ? invInput.value : null;
@@ -1050,7 +1208,6 @@ window.loadInvoice = async () => {
     return;
   }
 
-  // Sempre sincroniza também modal de pagamento
   const payYm = document.getElementById("pay-invoice-ym");
   if (payYm) payYm.value = invoiceYm;
 
@@ -1128,109 +1285,15 @@ function renderInvoiceItems(items) {
 async function deleteCardPurchase(id) {
   if (!confirm("Excluir esta compra do cartão?")) return;
   await api(`/cards/purchases/${id}`, { method: "DELETE" });
-  await loadInvoice();
+  await window.loadInvoice?.();
   await loadCombinedForCurrentMonth();
   renderAll();
   await reloadCharts();
-
-  const reportsView = document.getElementById("view-reports");
-  if (reportsView && !reportsView.classList.contains("hidden")) {
-    await generateAndRenderReport();
-  }
-
-  const exportsView = document.getElementById("view-exports");
-  if (exportsView && !exportsView.classList.contains("hidden")) {
-    await generateAndRenderExportPreview();
-  }
 }
 window.deleteCardPurchase = deleteCardPurchase;
 
 // ==========================================================
-// CHAT: /ai (Groq via backend)
-// ==========================================================
-const chatForm = document.getElementById("chat-form");
-if (chatForm) {
-  chatForm.onsubmit = async (e) => {
-    e.preventDefault();
-    const input = document.getElementById("chat-input");
-    const q = (input && input.value ? input.value.trim() : "");
-    if (!q || state.isAiProcessing) return;
-
-    const msgs = document.getElementById("chat-messages");
-    if (!msgs) return;
-
-    msgs.innerHTML += `
-      <div class="flex gap-3 flex-row-reverse">
-        <div class="chat-bubble-user p-3 px-4 shadow-sm text-sm max-w-[85%]">${safeText(q)}</div>
-      </div>`;
-    input.value = "";
-    msgs.scrollTop = msgs.scrollHeight;
-    state.isAiProcessing = true;
-
-    const loadingId = "load-" + Date.now();
-    msgs.innerHTML += `
-      <div id="${loadingId}" class="flex gap-3">
-        <div class="chat-bubble-ai p-3 shadow-sm text-sm text-slate-500">
-          <i class="fas fa-circle-notch animate-spin mr-2"></i>Analisando...
-        </div>
-      </div>`;
-    msgs.scrollTop = msgs.scrollHeight;
-
-    try {
-      const { year, month } = monthLabel(state.currentDate);
-
-      const context = {
-        monthRef: document.getElementById("current-month-display")?.innerText || "",
-        basis: "competencia",
-        summary_combined: state.summaryCombined,
-        accounts: state.accounts,
-        categories: state.categories,
-        cash_transactions: state.transactions.slice(0, 120),
-        combined_transactions: state.combinedTransactions.slice(0, 160),
-        credit_cards: state.cards,
-        selected_card_id: state.selectedCardId,
-        card_payment_category: state.cardPaymentCategory,
-        ym: `${year}-${String(month + 1).padStart(2, "0")}`,
-      };
-
-      const data = await api("/ai", {
-        method: "POST",
-        body: JSON.stringify({ question: q, context }),
-      });
-
-      const answer = (data && data.answer_md) ? data.answer_md : "Sem resposta do servidor.";
-      const node = document.getElementById(loadingId);
-      if (node) node.remove();
-
-      if (typeof marked === "undefined") {
-        msgs.innerHTML += `
-          <div class="flex gap-3">
-            <div class="chat-bubble-ai p-4 shadow-sm text-sm text-slate-700 max-w-[90%]">
-              <pre class="whitespace-pre-wrap">${safeText(answer)}</pre>
-            </div>
-          </div>`;
-      } else {
-        const rendered = sanitizeHtml(marked.parse(answer));
-        msgs.innerHTML += `
-          <div class="flex gap-3">
-            <div class="chat-bubble-ai p-4 shadow-sm text-sm text-slate-700 max-w-[90%]">
-              <div class="prose prose-sm max-w-none">${rendered}</div>
-            </div>
-          </div>`;
-      }
-    } catch (err) {
-      console.error(err);
-      const node = document.getElementById(loadingId);
-      if (node) node.innerHTML = `<span class="text-red-600 font-semibold">Erro: ${safeText(err.message || err)}</span>`;
-    } finally {
-      state.isAiProcessing = false;
-      msgs.scrollTop = msgs.scrollHeight;
-    }
-  };
-}
-
-// ==========================================================
-// RELATÓRIOS (server-side: /reports/monthly)
+// RELATÓRIOS (mantive o essencial do teu fluxo)
 // ==========================================================
 function ymNow() {
   const d = new Date();
@@ -1240,7 +1303,7 @@ function ymNow() {
 function parseYm(ym) {
   const [y, m] = String(ym || "").split("-");
   const year = Number(y);
-  const month = Number(m); // 1..12
+  const month = Number(m);
   if (!year || !month || month < 1 || month > 12) return null;
   return { year, month };
 }
@@ -1253,53 +1316,38 @@ function monthNamePt(month1to12) {
   return months[month1to12 - 1] || `Mês ${month1to12}`;
 }
 
-function mdMoney(v) {
-  return toMoney(Number(v || 0));
-}
+function mdMoney(v) { return toMoney(Number(v || 0)); }
 
 function aggregateMonthlyFromReport(report, year, month) {
   const tx = Array.isArray(report?.transactions) ? report.transactions : [];
   const cp = Array.isArray(report?.card_purchases) ? report.card_purchases : [];
 
-  // despesas de caixa “reais”: exclui pagamento de fatura
   const payCat = state.cardPaymentCategory;
+  let income = 0, expenseCash = 0, expenseCard = 0;
 
-  let income = 0;
-  let expenseCash = 0;
-  let expenseCard = 0;
-
-  const byCat = {};      // despesas por categoria (cash real + card purchases)
-  const byAccount = {};  // delta por conta (CAIXA, inclui pagamento e receitas)
-  const byDay = {};      // YYYY-MM-DD => {income, expense}
+  const byCat = {};
+  const byDay = {};
 
   tx.forEach(t => {
     const amt = Number(t.amount || 0);
     const isInc = t.type === "income";
     const isExp = t.type === "expense";
-
-    if (isInc) income += amt;
-
-    // conta: sempre reflete caixa (inclui pagamentos)
-    const accId = Number(t.account_id);
-    byAccount[accId] = (byAccount[accId] || 0) + (isInc ? amt : -amt);
-
     const day = t.date;
-    if (!byDay[day]) byDay[day] = { income: 0, expense: 0 };
-    if (isInc) byDay[day].income += amt;
 
-    // despesas “reais” (excluir pagamento)
+    if (!byDay[day]) byDay[day] = { income: 0, expense: 0 };
+    if (isInc) { income += amt; byDay[day].income += amt; }
+
     if (isExp && String(t.category || "") !== String(payCat)) {
       expenseCash += amt;
+      byDay[day].expense += amt;
       const cat = t.category || "Geral";
       byCat[cat] = (byCat[cat] || 0) + amt;
-      byDay[day].expense += amt;
     }
   });
 
   cp.forEach(p => {
     const amt = Number(p.amount || 0);
     expenseCard += amt;
-
     const cat = p.category || "Geral";
     byCat[cat] = (byCat[cat] || 0) + amt;
 
@@ -1316,32 +1364,11 @@ function aggregateMonthlyFromReport(report, year, month) {
     .slice(0, 10)
     .map(([category, total]) => ({ category, total }));
 
-  const accountRows = (state.accounts || []).map(a => ({
-    id: a.id,
-    name: a.name,
-    bank: a.bank,
-    type: a.type,
-    balance_delta: Number(byAccount[a.id] || 0),
-  })).sort((a,b) => Math.abs(b.balance_delta) - Math.abs(a.balance_delta));
-
   const daily = Object.entries(byDay)
     .sort((a,b) => a[0].localeCompare(b[0]))
     .map(([date, v]) => ({ date, income: v.income, expense: v.expense, net: v.income - v.expense }));
 
-  return {
-    year, month,
-    txCountCash: tx.length,
-    txCountCard: cp.length,
-    txCount: tx.length + cp.length,
-    income,
-    expenseCash,
-    expenseCard,
-    expense: expenseTotal,
-    balance,
-    topCats,
-    accountRows,
-    daily,
-  };
+  return { year, month, income, expenseCash, expenseCard, expense: expenseTotal, balance, topCats, daily, txCount: tx.length + cp.length };
 }
 
 function generateReportMarkdown(data) {
@@ -1349,46 +1376,25 @@ function generateReportMarkdown(data) {
   const title = `Relatório Financeiro (Competência) — ${monthNamePt(data.month)} ${data.year}`;
 
   const lines = [];
-  lines.push(`# ${title}`);
-  lines.push(``);
-  lines.push(`**Gerado em:** ${dtGen}`);
-  lines.push(``);
+  lines.push(`# ${title}`, ``);
+  lines.push(`**Gerado em:** ${dtGen}`, ``);
 
   lines.push(`## 1. Sumário Executivo`);
   lines.push(`- **Receitas (Caixa):** ${mdMoney(data.income)}`);
   lines.push(`- **Despesas (Caixa, sem pagamento de fatura):** ${mdMoney(data.expenseCash)}`);
   lines.push(`- **Despesas (Cartão na competência):** ${mdMoney(data.expenseCard)}`);
   lines.push(`- **Despesas totais (Competência):** ${mdMoney(data.expense)}`);
-  lines.push(`- **Saldo do período (Receitas − Despesas competência):** ${mdMoney(data.balance)}`);
-  lines.push(`- **Lançamentos:** ${data.txCount} (Caixa: ${data.txCountCash}, Cartão: ${data.txCountCard})`);
-  lines.push(``);
+  lines.push(`- **Saldo do período:** ${mdMoney(data.balance)}`);
+  lines.push(`- **Lançamentos:** ${data.txCount}`, ``);
 
   lines.push(`## 2. Principais Categorias de Despesa (Competência)`);
-  if (data.topCats.length === 0) {
-    lines.push(`Nenhuma despesa registrada na competência.`);
-  } else {
-    data.topCats.forEach((c, i) => {
-      lines.push(`${i + 1}. **${safeText(c.category)}** — ${mdMoney(c.total)}`);
-    });
-  }
+  if (!data.topCats.length) lines.push(`Nenhuma despesa registrada.`);
+  else data.topCats.forEach((c,i) => lines.push(`${i+1}. **${safeText(c.category)}** — ${mdMoney(c.total)}`));
   lines.push(``);
 
-  lines.push(`## 3. Variação por Conta (Δ no mês — Caixa)`);
-  if ((data.accountRows || []).length === 0) {
-    lines.push(`Nenhuma conta cadastrada.`);
-  } else {
-    lines.push(`| Conta | Banco | Tipo | Δ (mês) |`);
-    lines.push(`|---|---|---:|---:|`);
-    data.accountRows.forEach(a => {
-      lines.push(`| ${safeText(a.name)} | ${safeText(a.bank)} | ${safeText(a.type)} | ${mdMoney(a.balance_delta)} |`);
-    });
-  }
-  lines.push(``);
-
-  lines.push(`## 4. Série Diária (Receitas e Despesas por Competência)`);
-  if (data.daily.length === 0) {
-    lines.push(`Sem movimentos na série diária.`);
-  } else {
+  lines.push(`## 3. Série Diária`);
+  if (!data.daily.length) lines.push(`Sem movimentos.`);
+  else {
     lines.push(`| Data | Receitas | Despesas | Saldo do dia |`);
     lines.push(`|---|---:|---:|---:|`);
     data.daily.forEach(d => {
@@ -1398,9 +1404,9 @@ function generateReportMarkdown(data) {
   }
   lines.push(``);
 
-  lines.push(`## 5. Observações`);
-  lines.push(`- Compras no cartão são contabilizadas na **competência da fatura** (invoice_ym).`);
-  lines.push(`- Pagamento da fatura afeta o **caixa**, mas não é despesa “real”; por isso é excluído de despesas por competência.`);
+  lines.push(`## 4. Observações`);
+  lines.push(`- Cartão entra por competência (invoice_ym).`);
+  lines.push(`- Pagamento de fatura afeta o caixa, mas não é despesa “real”.`);
   lines.push(``);
 
   return lines.join("\n");
@@ -1461,14 +1467,9 @@ window.generateAndRenderReport = async () => {
   if (ymInput && !ymInput.value) ymInput.value = ymNow();
 
   const parsed = parseYm(ymInput ? ymInput.value : ymNow());
-  if (!parsed) {
-    showToast("Relatórios", "Competência inválida.");
-    return;
-  }
+  if (!parsed) { showToast("Relatórios", "Competência inválida."); return; }
 
-  // Busca no backend (consistente: tx + card_purchases)
   const report = await api(`/reports/monthly?year=${parsed.year}&month=${parsed.month}`);
-
   const data = aggregateMonthlyFromReport(report, parsed.year, parsed.month);
   const md = generateReportMarkdown(data);
   const html = reportToHtml(md);
@@ -1484,232 +1485,33 @@ window.generateAndRenderReport = async () => {
   const prev = document.getElementById("report-preview");
   if (!prev) return;
 
-  if (typeof marked === "undefined") {
-    prev.innerHTML = `<pre class="whitespace-pre-wrap">${safeText(md)}</pre>`;
-  } else {
-    prev.innerHTML = sanitizeHtml(marked.parse(md));
-  }
+  prev.innerHTML = (typeof marked === "undefined")
+    ? `<pre class="whitespace-pre-wrap">${safeText(md)}</pre>`
+    : sanitizeHtml(marked.parse(md));
 };
 
 window.downloadReport = async (fmt) => {
-  if (!state.reports.lastMd) await generateAndRenderReport();
+  if (!state.reports.lastMd) await window.generateAndRenderReport();
 
   const ymInput = document.getElementById("report-ym");
   const ym = (ymInput && ymInput.value) ? ymInput.value : ymNow();
 
-  if (fmt === "md") {
-    downloadBlob(`relatorio_${ym}.md`, state.reports.lastMd, "text/markdown;charset=utf-8");
-    return;
-  }
-  if (fmt === "html") {
-    downloadBlob(`relatorio_${ym}.html`, state.reports.lastHtml, "text/html;charset=utf-8");
-    return;
-  }
-  showToast("Relatórios", "Formato de download não suportado.");
+  if (fmt === "md") return downloadBlob(`relatorio_${ym}.md`, state.reports.lastMd, "text/markdown;charset=utf-8");
+  if (fmt === "html") return downloadBlob(`relatorio_${ym}.html`, state.reports.lastHtml, "text/html;charset=utf-8");
+  showToast("Relatórios", "Formato não suportado.");
 };
 
 window.printReport = async () => {
-  if (!state.reports.lastHtml) await generateAndRenderReport();
+  if (!state.reports.lastHtml) await window.generateAndRenderReport();
 
   const w = window.open("", "_blank");
-  if (!w) {
-    showToast("Relatórios", "Pop-up bloqueado. Autorize pop-ups para imprimir/salvar PDF.");
-    return;
-  }
+  if (!w) { showToast("Relatórios", "Pop-up bloqueado."); return; }
   w.document.open();
   w.document.write(state.reports.lastHtml);
   w.document.close();
   w.focus();
   setTimeout(() => w.print(), 350);
 };
-
-// ==========================================================
-// NOVA TELA: EXPORTAÇÕES (abaixo de Relatórios)
-// Usa /reports/export?year=&month=&fmt=csv|json
-// ==========================================================
-function exportDefaultYmFromUi() {
-  // Preferência: usa o mesmo YM do relatório (se existir)
-  const repYm = document.getElementById("report-ym")?.value;
-  const fallback = ymNow();
-  return (repYm && parseYm(repYm)) ? repYm : fallback;
-}
-
-function setExportBadge(ym) {
-  const badge = document.getElementById("exp-badge");
-  if (!badge) return;
-  const p = parseYm(ym);
-  badge.innerText = p ? `${monthNamePt(p.month)} ${p.year}` : String(ym || "");
-}
-
-function renderExportPreviewArea(text, mode = "json") {
-  const prev = document.getElementById("export-preview");
-  if (!prev) return;
-
-  if (!text) {
-    prev.innerHTML = `<div class="text-sm text-slate-400">Sem preview.</div>`;
-    return;
-  }
-
-  if (mode === "json") {
-    prev.innerHTML = `<pre class="text-xs bg-slate-50 border border-slate-200 rounded-2xl p-4 overflow-auto whitespace-pre-wrap">${safeText(text)}</pre>`;
-    return;
-  }
-
-  // CSV preview: mostra em <pre> (sem inventar tabela gigante)
-  prev.innerHTML = `<pre class="text-xs bg-slate-50 border border-slate-200 rounded-2xl p-4 overflow-auto whitespace-pre-wrap">${safeText(text)}</pre>`;
-}
-
-window.generateAndRenderExportPreview = async () => {
-  const ymInput = document.getElementById("export-ym");
-  if (ymInput && !ymInput.value) ymInput.value = exportDefaultYmFromUi();
-
-  const ym = ymInput ? ymInput.value : exportDefaultYmFromUi();
-  const parsed = parseYm(ym);
-  if (!parsed) {
-    showToast("Exportações", "Competência inválida.");
-    return;
-  }
-
-  const { year, month } = parsed;
-  setExportBadge(ym);
-
-  // Preview padrão: JSON (mais interpretável; CSV fica para download)
-  try {
-    const obj = await api(`/reports/export?year=${year}&month=${month}&fmt=json`);
-    const pretty = JSON.stringify(obj, null, 2);
-
-    state.exports.lastYm = ym;
-    state.exports.lastJsonObj = obj;
-    state.exports.lastJsonText = pretty;
-
-    // KPIs simples na tela de export (opcional)
-    const txCount = (obj?.transactions?.length || 0) + (obj?.card_purchases?.length || 0);
-    const el = document.getElementById("exp-count");
-    if (el) el.innerText = String(txCount);
-
-    renderExportPreviewArea(pretty, "json");
-  } catch (e) {
-    console.error(e);
-    showToast("Exportações", e.message || String(e));
-  }
-};
-
-window.downloadExportJson = async () => {
-  const ymInput = document.getElementById("export-ym");
-  const ym = (ymInput && ymInput.value) ? ymInput.value : exportDefaultYmFromUi();
-  const parsed = parseYm(ym);
-  if (!parsed) {
-    showToast("Exportações", "Competência inválida.");
-    return;
-  }
-
-  // Se não houver JSON em cache ou mudou a competência, gera preview de novo
-  if (!state.exports.lastJsonText || state.exports.lastYm !== ym) {
-    await generateAndRenderExportPreview();
-  }
-
-  downloadBlob(`financeai_${ym}_export.json`, state.exports.lastJsonText || "{}", "application/json;charset=utf-8");
-};
-
-window.downloadExportCsv = async () => {
-  const ymInput = document.getElementById("export-ym");
-  const ym = (ymInput && ymInput.value) ? ymInput.value : exportDefaultYmFromUi();
-  const parsed = parseYm(ym);
-  if (!parsed) {
-    showToast("Exportações", "Competência inválida.");
-    return;
-  }
-
-  const { year, month } = parsed;
-
-  try {
-    // Blob real (mantém Content-Disposition)
-    const { blob, filename } = await apiBlob(`/reports/export?year=${year}&month=${month}&fmt=csv`, { method: "GET" });
-
-    const finalName = filename || `financeai_${ym}_export.csv`;
-
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = finalName;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  } catch (e) {
-    console.error(e);
-
-    // Fallback: tenta baixar como texto (quando blob falhar por qualquer motivo)
-    try {
-      const text = await api(`/reports/export?year=${year}&month=${month}&fmt=csv`);
-      const csvText = String(text || "");
-      state.exports.lastCsvText = csvText;
-      downloadBlob(`financeai_${ym}_export.csv`, csvText, "text/csv;charset=utf-8");
-      renderExportPreviewArea(csvText.slice(0, 8000), "csv");
-    } catch (err2) {
-      console.error(err2);
-      showToast("Exportações", err2.message || String(err2));
-    }
-
-    showToast("Exportações", e.message || String(e));
-  }
-};
-
-// ==========================================================
-// PDF Viewer (upload local) - pdf.js
-// ==========================================================
-async function renderPdfFile(file) {
-  const meta = document.getElementById("pdf-meta");
-  const pages = document.getElementById("pdf-pages");
-  if (!pages) return;
-
-  pages.innerHTML = "";
-  if (!file) return;
-
-  if (typeof pdfjsLib === "undefined") {
-    showToast("PDF", "pdf.js não carregou.");
-    return;
-  }
-
-  const buf = await file.arrayBuffer();
-  const task = pdfjsLib.getDocument({ data: buf });
-  const pdf = await task.promise;
-
-  if (meta) meta.innerText = `${pdf.numPages} pág.`;
-
-  const maxPages = Math.min(pdf.numPages, 12);
-
-  for (let p = 1; p <= maxPages; p++) {
-    const page = await pdf.getPage(p);
-    const viewport = page.getViewport({ scale: 1.4 });
-
-    const wrap = document.createElement("div");
-    wrap.className = "bg-slate-50 border border-slate-200 rounded-2xl p-3 overflow-hidden";
-
-    const title = document.createElement("div");
-    title.className = "text-xs font-bold text-slate-600 mb-2";
-    title.innerText = `Página ${p}${pdf.numPages > maxPages ? ` (mostrando até ${maxPages})` : ""}`;
-    wrap.appendChild(title);
-
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d");
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
-    canvas.className = "w-full h-auto rounded-xl bg-white";
-    wrap.appendChild(canvas);
-
-    pages.appendChild(wrap);
-
-    await page.render({ canvasContext: ctx, viewport }).promise;
-  }
-
-  if (pdf.numPages > maxPages) {
-    const warn = document.createElement("div");
-    warn.className = "text-xs text-slate-500";
-    warn.innerText = `PDF grande: renderizadas apenas as primeiras ${maxPages} páginas.`;
-    pages.appendChild(warn);
-  }
-}
 
 // ==========================================================
 // UX: ESC fecha modais
@@ -1726,7 +1528,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 // ==========================================================
-// Init (DOM ready)
+// Init
 // ==========================================================
 document.addEventListener("DOMContentLoaded", () => {
   // datas default
@@ -1736,36 +1538,149 @@ document.addEventListener("DOMContentLoaded", () => {
   const pd = document.getElementById("purchase-date");
   if (pd) pd.valueAsDate = new Date();
 
-  // Sincroniza mudança de competência da fatura
+  // Aba cartão: mudança de competência recarrega fatura
   const invYm = document.getElementById("invoice-ym");
   if (invYm) invYm.addEventListener("change", () => window.loadInvoice());
 
-  // Ao mudar competência do relatório, recalcula preview
+  // Aba relatórios: mudança recarrega preview
   const repYm = document.getElementById("report-ym");
   if (repYm) repYm.addEventListener("change", () => window.generateAndRenderReport());
 
-  // Ao mudar competência de exportação, recalcula preview
-  const expYm = document.getElementById("export-ym");
-  if (expYm) expYm.addEventListener("change", () => window.generateAndRenderExportPreview());
-
-  // Hook PDF input
-  const inp = document.getElementById("report-pdf-input");
-  if (inp) {
-    inp.addEventListener("change", async (e) => {
-      const f = e.target.files && e.target.files[0];
-      if (!f) return;
-      try {
-        await renderPdfFile(f);
-      } catch (err) {
-        console.error(err);
-        showToast("PDF", err.message || String(err));
-      }
+  // Aba predições: alterna conta específica
+  const scope = document.getElementById("pred-scope");
+  if (scope) {
+    scope.addEventListener("change", () => {
+      const accSel = document.getElementById("pred-account");
+      if (accSel) accSel.classList.toggle("hidden", scope.value !== "account");
     });
   }
 
-  setActiveNav("dashboard");
-  refreshAll();
+  // transação (novo lançamento)
+  const txForm = document.getElementById("transaction-form");
+  if (txForm) {
+    txForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const btn = e.target.querySelector('button[type="submit"]');
+      const prevHtml = btn ? btn.innerHTML : "";
+      if (btn) { btn.innerHTML = "Salvando..."; setDisabled(btn, true); }
 
-  // Debug útil (console)
+      const payload = {
+        type: document.getElementById("tx-type")?.value || "expense",
+        amount: parseFloat(document.getElementById("tx-amount")?.value || "0"),
+        description: document.getElementById("tx-desc")?.value || "",
+        date: document.getElementById("tx-date")?.value || "",
+        account_id: Number(document.getElementById("tx-account")?.value || 0),
+        category: document.getElementById("tx-category")?.value || "Geral",
+      };
+
+      try {
+        await api("/transactions", { method: "POST", body: JSON.stringify(payload) });
+        e.target.reset();
+        const txDateEl = document.getElementById("tx-date");
+        if (txDateEl) txDateEl.valueAsDate = new Date();
+
+        await Promise.all([loadTransactionsForCurrentMonth(), loadCombinedForCurrentMonth()]);
+        renderAll();
+        await reloadCharts();
+      } catch (err) {
+        console.error(err);
+        showToast("Erro", err.message || String(err));
+      } finally {
+        if (btn) { btn.innerHTML = prevHtml || '<i class="fas fa-save"></i> Salvar Lançamento'; setDisabled(btn, false); }
+      }
+    };
+  }
+
+  // CHAT
+  const chatForm = document.getElementById("chat-form");
+  if (chatForm) {
+    chatForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const input = document.getElementById("chat-input");
+      const q = (input && input.value ? input.value.trim() : "");
+      if (!q || state.isAiProcessing) return;
+
+      const msgs = document.getElementById("chat-messages");
+      if (!msgs) return;
+
+      msgs.innerHTML += `
+        <div class="flex gap-3 flex-row-reverse">
+          <div class="chat-bubble-user p-3 px-4 shadow-sm text-sm max-w-[85%]">${safeText(q)}</div>
+        </div>`;
+      input.value = "";
+      msgs.scrollTop = msgs.scrollHeight;
+      state.isAiProcessing = true;
+
+      const loadingId = "load-" + Date.now();
+      msgs.innerHTML += `
+        <div id="${loadingId}" class="flex gap-3">
+          <div class="chat-bubble-ai p-3 shadow-sm text-sm text-slate-500">
+            <i class="fas fa-circle-notch animate-spin mr-2"></i>Analisando...
+          </div>
+        </div>`;
+      msgs.scrollTop = msgs.scrollHeight;
+
+      try {
+        const { year, month } = monthLabel(state.currentDate);
+
+        const context = {
+          monthRef: document.getElementById("current-month-display")?.innerText || "",
+          basis: "competencia",
+          summary_combined: state.summaryCombined,
+          accounts: state.accounts,
+          categories: state.categories,
+          cash_transactions: state.transactions.slice(0, 120),
+          combined_transactions: state.combinedTransactions.slice(0, 160),
+          credit_cards: state.cards,
+          selected_card_id: state.selectedCardId,
+          card_payment_category: state.cardPaymentCategory,
+          ym: `${year}-${String(month + 1).padStart(2, "0")}`,
+        };
+
+        const data = await api("/ai", {
+          method: "POST",
+          body: JSON.stringify({ question: q, context }),
+        });
+
+        const answer = (data && data.answer_md) ? data.answer_md : "Sem resposta do servidor.";
+        const node = document.getElementById(loadingId);
+        if (node) node.remove();
+
+        if (typeof marked === "undefined") {
+          msgs.innerHTML += `
+            <div class="flex gap-3">
+              <div class="chat-bubble-ai p-4 shadow-sm text-sm text-slate-700 max-w-[90%]">
+                <pre class="whitespace-pre-wrap">${safeText(answer)}</pre>
+              </div>
+            </div>`;
+        } else {
+          const rendered = sanitizeHtml(marked.parse(answer));
+          msgs.innerHTML += `
+            <div class="flex gap-3">
+              <div class="chat-bubble-ai p-4 shadow-sm text-sm text-slate-700 max-w-[90%]">
+                <div class="prose prose-sm max-w-none">${rendered}</div>
+              </div>
+            </div>`;
+        }
+      } catch (err) {
+        console.error(err);
+        const node = document.getElementById(loadingId);
+        if (node) node.innerHTML = `<span class="text-red-600 font-semibold">Erro: ${safeText(err.message || err)}</span>`;
+      } finally {
+        state.isAiProcessing = false;
+        msgs.scrollTop = msgs.scrollHeight;
+      }
+    };
+  }
+
+  // Inicialização visual
+  setActiveNav("dashboard");
+
+  // Se a pessoa abrir via file://, avisa.
+  if (location.protocol === "file:") {
+    showToast("Atenção", "Você está abrindo via file://. Rode um servidor local (python -m http.server) para evitar CORS.", 8000);
+  }
+
+  refreshAll();
   console.log("[FinanceAI] API_BASE =", API_BASE);
 });
