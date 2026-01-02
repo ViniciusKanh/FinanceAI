@@ -1,8 +1,8 @@
 "use strict";
 
-// ==========================================================
-// CONFIG
-// ==========================================================
+/* ==========================================================
+   CONFIG
+   ========================================================== */
 // Permite configurar via localStorage:
 // localStorage.setItem("FINANCEAI_API_BASE","http://localhost:8000");
 // localStorage.removeItem("FINANCEAI_API_BASE");
@@ -13,9 +13,9 @@ const API_BASE = (localStorage.getItem("FINANCEAI_API_BASE") || DEFAULT_API_BASE
 
 window.FINANCEAI_API_BASE = API_BASE;
 
-// ==========================================================
-// ESTADO LOCAL (frontend)
-// ==========================================================
+/* ==========================================================
+   ESTADO LOCAL (frontend)
+   ========================================================== */
 const state = {
   accounts: [],
   categories: [],
@@ -56,9 +56,9 @@ const state = {
   }
 };
 
-// ==========================================================
-// TOAST
-// ==========================================================
+/* ==========================================================
+   TOAST
+   ========================================================== */
 function showToast(title, msg, ms = 3500) {
   const box = document.getElementById("toast");
   const t = document.getElementById("toast-title");
@@ -74,9 +74,9 @@ function showToast(title, msg, ms = 3500) {
 }
 window.toast = showToast;
 
-// ==========================================================
-// HELPERS
-// ==========================================================
+/* ==========================================================
+   HELPERS
+   ========================================================== */
 function monthLabel(date) {
   const year = date.getFullYear();
   const month = date.getMonth(); // 0..11
@@ -120,9 +120,9 @@ function destroyChart(inst) {
   if (inst && typeof inst.destroy === "function") inst.destroy();
 }
 
-// ==========================================================
-// API (fetch com timeout + erros uniformes)
-// ==========================================================
+/* ==========================================================
+   API (fetch com timeout + erros uniformes)
+   ========================================================== */
 async function api(path, options = {}) {
   const url = `${API_BASE}${path}`;
   const headers = { ...(options.headers || {}) };
@@ -155,7 +155,7 @@ async function api(path, options = {}) {
     let detail = "";
     try {
       const j = await resp.json();
-      detail = j.detail || JSON.stringify(j);
+      detail = j.detail || j.message || j.error || JSON.stringify(j);
     } catch {
       try { detail = await resp.text(); } catch { detail = ""; }
     }
@@ -169,9 +169,9 @@ async function api(path, options = {}) {
   try { return JSON.parse(text); } catch { return text; }
 }
 
-// ==========================================================
-// LOADERS
-// ==========================================================
+/* ==========================================================
+   LOADERS
+   ========================================================== */
 async function loadHealth() {
   state.health = await api("/health");
   state.cardPaymentCategory =
@@ -224,6 +224,7 @@ async function refreshAll() {
     const predView = document.getElementById("view-predictions");
     if (predView && !predView.classList.contains("hidden") && state.predictions.lastPayload) {
       renderPredictionsUI(state.predictions.lastPayload);
+      renderPredictionsCharts(state.predictions.lastPayload);
     }
   } catch (e) {
     console.error(e);
@@ -232,9 +233,9 @@ async function refreshAll() {
 }
 window.refreshAll = refreshAll;
 
-// ==========================================================
-// RENDERERS
-// ==========================================================
+/* ==========================================================
+   RENDERERS
+   ========================================================== */
 function renderAll() {
   renderAccounts();
   renderCategories();
@@ -294,7 +295,7 @@ function renderAccounts() {
 
   state.transactions.forEach(tx => {
     if (accBalances[tx.account_id] !== undefined) {
-      accBalances[tx.account_id] += (tx.type === "income" ? tx.amount : -tx.amount);
+      accBalances[tx.account_id] += (tx.type === "income" ? Number(tx.amount || 0) : -Number(tx.amount || 0));
     }
   });
 
@@ -445,7 +446,7 @@ function renderDashboard() {
   }).join("");
 }
 
-// ===== Credit card render =====
+/* ===== Credit card render ===== */
 function renderCreditCardsList() {
   const container = document.getElementById("cards-list");
   if (!container) return;
@@ -518,9 +519,9 @@ async function renderCreditControls() {
   }
 }
 
-// ==========================================================
-// CHARTS (Dashboard)
-// ==========================================================
+/* ==========================================================
+   CHARTS (Dashboard)
+   ========================================================== */
 async function reloadCharts() {
   await Promise.all([renderTimeseriesChart(), renderCategoriesChart()]);
 }
@@ -646,9 +647,9 @@ function renderCardCategoryChart(purchases) {
   });
 }
 
-// ==========================================================
-// NAV (Desktop + Mobile) - ALINHADO AO TEU HTML
-// ==========================================================
+/* ==========================================================
+   NAV (Desktop + Mobile) - ALINHADO AO HTML
+   ========================================================== */
 function setActiveNav(view) {
   const ids = ["dashboard", "predictions", "credit", "settings", "reports"];
 
@@ -691,6 +692,7 @@ window.switchView = async (v) => {
     if (v === "reports") await window.generateAndRenderReport?.();
     if (v === "predictions" && state.predictions.lastPayload) {
       renderPredictionsUI(state.predictions.lastPayload);
+      renderPredictionsCharts(state.predictions.lastPayload);
     }
   } catch (e) {
     console.error(e);
@@ -707,9 +709,9 @@ window.toggleModal = (id) => {
   if (el) el.classList.toggle("hidden");
 };
 
-// ==========================================================
-// DASHBOARD ACTIONS
-// ==========================================================
+/* ==========================================================
+   DASHBOARD ACTIONS
+   ========================================================== */
 window.setTxType = (type) => {
   const txType = document.getElementById("tx-type");
   if (txType) txType.value = type;
@@ -746,9 +748,19 @@ window.filterDate = async (d) => {
   }
 };
 
-// ==========================================================
-// PREDICTIONS (NOVA ABA) - IDs pred-* do teu HTML
-// ==========================================================
+/* ==========================================================
+   PREDICTIONS (ABA) — CONTRATO NOVO (backend ml_forecast.py)
+   Esperado:
+   {
+     meta:{basis,trained_at,lags,income_algo,expense_algo},
+     horizon_days:int,
+     kpis:{income_pred_total,expense_pred_total,net_pred_total},
+     series:[{date,income_pred,expense_pred,net_pred,income_low, ... , expense_by_category:{...}}],
+     top_categories:[{category,amount,share}],
+     alerts:[{level,message}],
+     risk_score:int(0..10)
+   }
+   ========================================================== */
 function hydratePredictionsSelects() {
   const accSel = document.getElementById("pred-account");
   if (!accSel) return;
@@ -769,35 +781,265 @@ function setPredMeta(text) {
   if (el) el.innerText = text;
 }
 
-function predSum(arr, key) {
-  return (arr || []).reduce((acc, r) => acc + Number(r?.[key] || 0), 0);
+/* --- Pred utils (robustos) --- */
+function asNumber(x) {
+  const n = Number(x);
+  return Number.isFinite(n) ? n : 0;
 }
 
-function computeRiskFromPred(predRows) {
-  // Heurística simples: conta dias com net muito negativo e dias com despesa acima do percentil "alto"
-  const nets = (predRows || []).map(r => Number(r.net_pred ?? r.net ?? (Number(r.income_pred || 0) - Number(r.expense_pred || 0))));
-  const exps = (predRows || []).map(r => Number(r.expense_pred ?? r.expense ?? 0));
+function clampCanvasHeight(canvasEl, h = 260) {
+  if (!canvasEl) return;
+  if (!canvasEl.height || canvasEl.height < 80) canvasEl.height = h;
+}
 
-  if (!nets.length) return { level: "—", count: 0 };
+function isIsoDate(s) {
+  return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+}
 
-  const sortedExp = [...exps].sort((a,b) => a-b);
-  const p80 = sortedExp[Math.floor(0.8 * (sortedExp.length-1))] || 0;
+function fmtLabel(x) {
+  if (!x) return "—";
+  if (isIsoDate(x)) return new Date(x + "T00:00:00").toLocaleDateString("pt-BR");
+  return String(x);
+}
 
-  let negDays = 0;
-  let highExpDays = 0;
-  for (let i=0; i<nets.length; i++) {
-    if (nets[i] < 0) negDays++;
-    if (exps[i] > p80 && p80 > 0) highExpDays++;
+function median(arr) {
+  const a = (arr || []).filter(n => Number.isFinite(n)).slice().sort((x, y) => x - y);
+  if (!a.length) return 0;
+  const mid = Math.floor(a.length / 2);
+  return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
+}
+
+function riskLabel(score0to10) {
+  const s = asNumber(score0to10);
+  if (s >= 7) return "Alto";
+  if (s >= 3) return "Médio";
+  return "Baixo";
+}
+
+function levelToUi(level) {
+  const lv = String(level || "").toLowerCase();
+  if (lv.includes("warn") || lv.includes("warning")) {
+    return { icon: "fa-triangle-exclamation", cls: "bg-amber-50 border-amber-200 text-amber-900", title: "Atenção" };
+  }
+  if (lv.includes("error") || lv.includes("critical")) {
+    return { icon: "fa-circle-xmark", cls: "bg-rose-50 border-rose-200 text-rose-900", title: "Risco" };
+  }
+  if (lv.includes("info")) {
+    return { icon: "fa-circle-info", cls: "bg-sky-50 border-sky-200 text-sky-900", title: "Info" };
+  }
+  return { icon: "fa-circle-check", cls: "bg-emerald-50 border-emerald-200 text-emerald-900", title: "OK" };
+}
+
+/**
+ * Normaliza resposta do backend para um formato único no front.
+ * - Novo contrato: payload.series + payload.kpis
+ * - Antigo (se existir): payload.predictions/history
+ */
+function normalizeForecastDaily(payload) {
+  const p = payload || {};
+
+  // -------------------------
+  // 1) CONTRATO "NOVO" ANTIGO (series + kpis no topo)
+  // -------------------------
+  const isNew = Array.isArray(p.series) && p.kpis && typeof p.kpis === "object";
+  if (isNew) {
+    const horizon = asNumber(p.horizon_days || (p.series?.length || 7)) || 7;
+    const series = (p.series || [])
+      .filter(r => r && isIsoDate(r.date))
+      .map(r => ({
+        date: r.date,
+        label: fmtLabel(r.date),
+        income: asNumber(r.income_pred),
+        expense: asNumber(r.expense_pred),
+        net: asNumber(r.net_pred ?? (asNumber(r.income_pred) - asNumber(r.expense_pred))),
+        income_low: asNumber(r.income_low),
+        income_high: asNumber(r.income_high),
+        expense_low: asNumber(r.expense_low),
+        expense_high: asNumber(r.expense_high),
+        expense_by_category: r.expense_by_category || null,
+      }));
+
+    return {
+      contract: "new",
+      meta: p.meta || {},
+      basis: String(p?.meta?.basis || p.basis || "cash_daily_sklearn"),
+      horizonDays: horizon,
+      kpis: {
+        income: asNumber(p?.kpis?.income_pred_total),
+        expense: asNumber(p?.kpis?.expense_pred_total),
+        net: asNumber(p?.kpis?.net_pred_total),
+      },
+      series,
+      topCategories: Array.isArray(p.top_categories) ? p.top_categories : [],
+      alerts: Array.isArray(p.alerts) ? p.alerts : [],
+      riskScore: asNumber(p.risk_score),
+    };
   }
 
-  const count = negDays + highExpDays;
-  let level = "Baixo";
-  if (count >= 6) level = "Alto";
-  else if (count >= 3) level = "Médio";
+  // -------------------------
+  // 2) SEU BACKEND ATUAL (v2): predictions + metrics.{kpis,alerts,risk_score,meta,top_categories}
+  // -------------------------
+  const isBackendV2 =
+    Array.isArray(p.predictions) &&
+    p.metrics &&
+    typeof p.metrics === "object";
 
-  return { level, count, negDays, highExpDays };
+  if (isBackendV2) {
+    const preds = p.predictions || [];
+    const horizon = asNumber(p.days || preds.length || 7) || 7;
+
+    const series = preds.map((r, idx) => {
+      const date = r?.date || null;
+
+      // Aceita tanto income_pred/expense_pred quanto income/expense (fallback)
+      const income = asNumber(r?.income_pred ?? r?.income);
+      const expense = asNumber(r?.expense_pred ?? r?.expense ?? r?.expense_total);
+      const net = asNumber(r?.net_pred ?? r?.net ?? (income - expense));
+
+      return {
+        date: isIsoDate(date) ? date : null,
+        label: isIsoDate(date) ? fmtLabel(date) : `t+${idx + 1}`,
+        income,
+        expense,
+        net,
+        income_low: asNumber(r?.income_low),
+        income_high: asNumber(r?.income_high),
+        expense_low: asNumber(r?.expense_low),
+        expense_high: asNumber(r?.expense_high),
+        expense_by_category: (r?.expense_by_category && typeof r.expense_by_category === "object")
+          ? r.expense_by_category
+          : null,
+      };
+    });
+
+    const k = (p.metrics.kpis && typeof p.metrics.kpis === "object") ? p.metrics.kpis : {};
+    const kIncome = asNumber(k.income_pred_total ?? k.income_total ?? 0);
+    const kExpense = asNumber(k.expense_pred_total ?? k.expense_total ?? 0);
+    const kNet = asNumber(k.net_pred_total ?? (kIncome - kExpense));
+
+    return {
+      contract: "backend_v2",
+      meta: p.metrics.meta || {},
+      basis: String(p.basis || p.metrics?.meta?.basis || "cash_daily_sklearn"),
+      horizonDays: horizon,
+      kpis: { income: kIncome, expense: kExpense, net: kNet },
+      series,
+      topCategories: Array.isArray(p.metrics.top_categories) ? p.metrics.top_categories : [],
+      alerts: Array.isArray(p.metrics.alerts) ? p.metrics.alerts : [],
+      riskScore: asNumber(p.metrics.risk_score),
+    };
+  }
+
+  // -------------------------
+  // 3) FALLBACK: contrato antigo genérico (predictions sem metrics)
+  // -------------------------
+  const predRaw = Array.isArray(p.predictions) ? p.predictions : [];
+  const horizon = asNumber(p.horizon_days || predRaw.length || 7) || 7;
+
+  const series = predRaw.map((r, idx) => {
+    const date = r?.date || null;
+    const income = asNumber(r?.income_pred ?? r?.income);
+    const expense = asNumber(r?.expense_pred ?? r?.expense ?? r?.expense_total);
+    const net = asNumber(r?.net_pred ?? r?.net ?? (income - expense));
+    return {
+      date: isIsoDate(date) ? date : null,
+      label: isIsoDate(date) ? fmtLabel(date) : `t+${idx + 1}`,
+      income,
+      expense,
+      net,
+      income_low: asNumber(r?.income_low),
+      income_high: asNumber(r?.income_high),
+      expense_low: asNumber(r?.expense_low),
+      expense_high: asNumber(r?.expense_high),
+      expense_by_category: null,
+    };
+  });
+
+  const kIncome = series.reduce((a, r) => a + r.income, 0);
+  const kExpense = series.reduce((a, r) => a + r.expense, 0);
+  const kNet = series.reduce((a, r) => a + r.net, 0);
+
+  return {
+    contract: "old",
+    meta: p.meta || {},
+    basis: String(p.basis || p?.meta?.basis || "daily"),
+    horizonDays: horizon,
+    kpis: { income: kIncome, expense: kExpense, net: kNet },
+    series,
+    topCategories: [],
+    alerts: [],
+    riskScore: 0,
+  };
 }
 
+/**
+ * Gera histórico diário a partir das transações combinadas (competência),
+ * para dar contexto no gráfico (últimos ~30 dias).
+ */
+function buildDailyHistoryFromCombined(maxDays = 30) {
+  const rows = Array.isArray(state.combinedTransactions) ? state.combinedTransactions : [];
+  const byDay = {};
+
+  for (const r of rows) {
+    const dt = r?.date || r?.purchase_date;
+    if (!dt) continue;
+    const date = String(dt).slice(0, 10);
+    if (!isIsoDate(date)) continue;
+
+    if (!byDay[date]) byDay[date] = { income: 0, expense: 0, net: 0 };
+
+    const isCard = (r?.source === "card");
+    const isInc = (!isCard) && (r?.type === "income");
+    const isExp = isCard || (r?.type === "expense");
+
+    const amt = asNumber(r?.amount);
+    if (amt <= 0) continue;
+
+    if (isInc) byDay[date].income += amt;
+    if (isExp) byDay[date].expense += amt;
+  }
+
+  const days = Object.keys(byDay).sort((a, b) => a.localeCompare(b));
+  const tail = days.slice(Math.max(0, days.length - maxDays));
+
+  return tail.map(d => {
+    const v = byDay[d];
+    const net = asNumber(v.income) - asNumber(v.expense);
+    return { date: d, label: fmtLabel(d), income: asNumber(v.income), expense: asNumber(v.expense), net };
+  });
+}
+
+function setPredLoading(isLoading) {
+  const btn = document.getElementById("btn-run-pred");
+  const icon = document.getElementById("pred-loading-icon"); // opcional (se existir no HTML)
+
+  if (btn) {
+    setDisabled(btn, isLoading);
+    btn.innerHTML = isLoading
+      ? `<i class="fas fa-circle-notch animate-spin mr-2"></i>Gerando...`
+      : `<i class="fas fa-wand-magic-sparkles mr-2"></i> Gerar`;
+  }
+  if (icon) icon.classList.toggle("hidden", !isLoading);
+
+  // deixa os cards “vivos” durante o load
+  const elBal = document.getElementById("pred-balance");
+  const elInc = document.getElementById("pred-income");
+  const elExp = document.getElementById("pred-expense");
+  const elRisk = document.getElementById("pred-risk");
+  const elCount = document.getElementById("pred-count");
+  const elNote = document.getElementById("pred-balance-note");
+
+  if (isLoading) {
+    if (elBal) elBal.innerText = "…";
+    if (elInc) elInc.innerText = "…";
+    if (elExp) elExp.innerText = "…";
+    if (elRisk) elRisk.innerText = "Processando…";
+    if (elCount) elCount.innerText = "—";
+    if (elNote) elNote.innerText = "calculando previsão…";
+  }
+}
+
+/* --- Charts de predição --- */
 function renderPredictionsCharts(payload) {
   if (typeof Chart === "undefined") {
     showToast("Predições", "Chart.js não carregou.");
@@ -807,219 +1049,99 @@ function renderPredictionsCharts(payload) {
   const flowCanvas = document.getElementById("chart-pred-flow");
   const catCanvas = document.getElementById("chart-pred-categories");
 
-  const hist = Array.isArray(payload?.history) ? payload.history : [];
-  const pred = Array.isArray(payload?.predictions) ? payload.predictions : [];
-  const basis = String(payload?.basis || "").toLowerCase();
-
-  // Heurística: detectar modo diário (net_pred) vs mensal (income/expense)
-  const hasNetPred = pred.some(r => r && Object.prototype.hasOwnProperty.call(r, "net_pred"));
-  const hasIncomePred = pred.some(r => r && (r.income_pred != null || r.income != null));
-  const hasExpensePred = pred.some(r => r && (r.expense_pred != null || r.expense != null || r.expense_total != null));
-  const isDaily = basis.includes("daily") || (hasNetPred && !(hasIncomePred && hasExpensePred));
-
-  // Utilitários
-  const num = (v) => {
-    const x = Number(v);
-    return Number.isFinite(x) ? x : 0;
-  };
-
-  const rawLabel = (r) => (r?.date || r?.ym || r?.period || null);
-
-  const fmtLabel = (x) => {
-    if (!x) return "";
-    if (/^\d{4}-\d{2}-\d{2}$/.test(x)) return new Date(x + "T00:00:00").toLocaleDateString("pt-BR");
-    return String(x);
-  };
-
-  // Garante estrutura do state
-  if (!window.state) window.state = {};
-  if (!state.charts) state.charts = {};
+  const norm = normalizeForecastDaily(payload);
+  const pred = norm.series || [];
+  const hist = buildDailyHistoryFromCombined(30);
 
   // ---------- Flow (hist + pred) ----------
-  // - Modo mensal: plota Receitas vs Despesas
-  // - Modo diário: plota Saldo líquido (net) + zero-line implícita via eixo
   if (flowCanvas) {
-    const labels = [
-      ...hist.map(rawLabel),
-      ...pred.map(rawLabel),
-    ].filter(Boolean);
+    clampCanvasHeight(flowCanvas, 260);
 
+    const labels = [...hist.map(r => r.label), ...pred.map(r => r.label)];
+    const netSeries = [...hist.map(r => asNumber(r.net)), ...pred.map(r => asNumber(r.net))];
+
+    destroyChart(state.charts.predFlow);
     if (!labels.length) {
-      destroyChart(state.charts.predFlow);
       state.charts.predFlow = null;
     } else {
-      destroyChart(state.charts.predFlow);
+      const n = Math.min(labels.length, netSeries.length);
 
-      if (isDaily) {
-        // Série histórica pode não ter net; tenta derivar, senão usa 0
-        const netSeries = [
-          ...hist.map(r => {
-            const hasNet = r && Object.prototype.hasOwnProperty.call(r, "net");
-            if (hasNet) return num(r.net);
-            const inc = num(r?.income ?? 0);
-            const exp = num(r?.expense ?? r?.expense_total ?? 0);
-            return inc - exp;
-          }),
-          ...pred.map(r => num(r?.net_pred ?? r?.net ?? 0)),
-        ];
-
-        state.charts.predFlow = new Chart(flowCanvas, {
-          type: "line",
-          data: {
-            labels: labels.map(fmtLabel),
-            datasets: [
-              { label: "Saldo líquido", data: netSeries, tension: 0.25 },
-            ],
-          },
-          options: {
-            responsive: true,
-            plugins: {
-              legend: { display: true },
-              tooltip: {
-                callbacks: {
-                  label: (ctx) => `${ctx.dataset.label}: ${toMoney(ctx.parsed.y)}`,
-                },
-              },
-            },
-            scales: {
-              y: {
-                ticks: { callback: (v) => toMoney(v) },
-              },
-            },
-          },
-        });
-      } else {
-        const incomeSeries = [
-          ...hist.map(r => num(r?.income ?? 0)),
-          ...pred.map(r => num(r?.income_pred ?? r?.income ?? 0)),
-        ];
-
-        const expenseSeries = [
-          ...hist.map(r => num(r?.expense ?? r?.expense_total ?? 0)),
-          ...pred.map(r => num(r?.expense_pred ?? r?.expense ?? r?.expense_total ?? 0)),
-        ];
-
-        state.charts.predFlow = new Chart(flowCanvas, {
-          type: "line",
-          data: {
-            labels: labels.map(fmtLabel),
-            datasets: [
-              { label: "Receitas", data: incomeSeries, tension: 0.25 },
-              { label: "Despesas", data: expenseSeries, tension: 0.25 },
-            ],
-          },
-          options: {
-            responsive: true,
-            plugins: {
-              legend: { display: true },
-              tooltip: {
-                callbacks: {
-                  label: (ctx) => `${ctx.dataset.label}: ${toMoney(ctx.parsed.y)}`,
-                },
-              },
-            },
-            scales: {
-              y: { ticks: { callback: (v) => toMoney(v) } },
-            },
-          },
-        });
-      }
-    }
-  }
-
-  // ---------- Categories provável (heurística local) ----------
-  // Observação: continua sendo "heurística", mas agora:
-  // - filtra só despesas (inclui cartão e expense)
-  // - ignora valores inválidos/<=0
-  // - limita top-N e trata caso sem dados
-  if (catCanvas) {
-    const lastCats = {};
-    const rows = Array.isArray(state.combinedTransactions) ? state.combinedTransactions : [];
-
-    for (const r of rows) {
-      const isExpense = (r?.source === "card") || (r?.type === "expense");
-      if (!isExpense) continue;
-
-      const amt = num(r?.amount);
-      if (amt <= 0) continue;
-
-      const cat = (r?.category && String(r.category).trim()) ? String(r.category).trim() : "Geral";
-      lastCats[cat] = (lastCats[cat] || 0) + amt;
-    }
-
-    const top = Object.entries(lastCats)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 8);
-
-    destroyChart(state.charts.predCats);
-
-    if (!top.length) {
-      state.charts.predCats = null;
-      // opcional: mostrar toast discreto, sem poluir UX
-      // showToast("Predições", "Sem dados suficientes para categorias previstas.");
-    } else {
-      const labels = top.map(x => x[0]);
-      const totals = top.map(x => x[1]);
-
-      state.charts.predCats = new Chart(catCanvas, {
-        type: "doughnut",
+      state.charts.predFlow = new Chart(flowCanvas, {
+        type: "line",
         data: {
-          labels,
-          datasets: [{ data: totals }],
+          labels: labels.slice(0, n),
+          datasets: [{ label: "Saldo líquido (histórico + previsão)", data: netSeries.slice(0, n), tension: 0.25 }],
         },
         options: {
           responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: true },
+            tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${toMoney(ctx.parsed.y)}` } }
+          },
+          scales: { y: { ticks: { callback: (v) => toMoney(v) } } },
+        }
+      });
+    }
+  }
+
+  // ---------- Categories provável (do backend) ----------
+  if (catCanvas) {
+    clampCanvasHeight(catCanvas, 240);
+
+    // 1) se backend trouxe top_categories, usa
+    let top = Array.isArray(norm.topCategories) ? norm.topCategories : [];
+    top = top
+      .map(x => ({ category: String(x.category || "Outros"), amount: asNumber(x.amount || 0) }))
+      .filter(x => x.amount > 0)
+      .slice(0, 10);
+
+    // 2) fallback: soma categorias do histórico do mês
+    if (!top.length) {
+      const byCat = {};
+      const rows = Array.isArray(state.combinedTransactions) ? state.combinedTransactions : [];
+      for (const r of rows) {
+        const isExpense = (r?.source === "card") || (r?.type === "expense");
+        if (!isExpense) continue;
+        const amt = asNumber(r?.amount);
+        if (amt <= 0) continue;
+        const cat = (r?.category && String(r.category).trim()) ? String(r.category).trim() : "Geral";
+        byCat[cat] = (byCat[cat] || 0) + amt;
+      }
+      top = Object.entries(byCat)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10)
+        .map(([category, amount]) => ({ category, amount }));
+    }
+
+    destroyChart(state.charts.predCats);
+    if (!top.length) {
+      state.charts.predCats = null;
+    } else {
+      const labels = top.map(x => x.category);
+      const totals = top.map(x => x.amount);
+
+      state.charts.predCats = new Chart(catCanvas, {
+        type: "doughnut",
+        data: { labels, datasets: [{ data: totals }] },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
           plugins: {
             legend: { display: true, position: "bottom" },
-            tooltip: {
-              callbacks: {
-                label: (ctx) => `${ctx.label}: ${toMoney(ctx.parsed)}`,
-              },
-            },
+            tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${toMoney(ctx.parsed)}` } }
           },
-        },
+        }
       });
     }
   }
 }
 
-
+/* --- UI de predição --- */
 function renderPredictionsUI(payload) {
-  const pred = Array.isArray(payload?.predictions) ? payload.predictions : [];
-  const basis = String(payload?.basis || "").toLowerCase();
-
-  // Heurística para detectar modo diário (net_pred) vs mensal (income/expense)
-  const hasNetPred = pred.some(r => r && Object.prototype.hasOwnProperty.call(r, "net_pred"));
-  const hasIncomePred = pred.some(r => r && (r.income_pred != null || r.income != null));
-  const hasExpensePred = pred.some(r => r && (r.expense_pred != null || r.expense != null || r.expense_total != null));
-  const isDaily = basis.includes("daily") || (hasNetPred && !(hasIncomePred && hasExpensePred));
-
-  // Horizonte (dias/períodos)
-  const horizonInput = Number(document.getElementById("pred-horizon")?.value || 0);
-  const horizon = pred.length || horizonInput;
-
-  // Normalização numérica segura
-  const num = (v) => {
-    const x = Number(v);
-    return Number.isFinite(x) ? x : 0;
-  };
-
-  // ----------------------------
-  // KPIs
-  // ----------------------------
-  let income = 0;
-  let expense = 0;
-  let balance = 0;
-
-  if (isDaily) {
-    // Modo diário: usa net_pred diretamente
-    balance = pred.reduce((acc, r) => acc + num(r?.net_pred), 0);
-  } else {
-    // Modo mensal/competência: usa income/expense
-    income = predSum(pred, "income_pred") || predSum(pred, "income") || 0;
-    expense = predSum(pred, "expense_pred") || predSum(pred, "expense") || predSum(pred, "expense_total") || 0;
-    balance = income - expense;
-  }
+  const norm = normalizeForecastDaily(payload);
+  const pred = norm.series || [];
+  const horizon = norm.horizonDays || pred.length || 7;
 
   const elBal = document.getElementById("pred-balance");
   const elInc = document.getElementById("pred-income");
@@ -1028,96 +1150,50 @@ function renderPredictionsUI(payload) {
   const elCount = document.getElementById("pred-count");
   const elNote = document.getElementById("pred-balance-note");
 
-  if (elBal) elBal.innerText = toMoney(balance);
-
-  if (isDaily) {
-    if (elInc) elInc.innerText = "—";
-    if (elExp) elExp.innerText = "—";
-    if (elNote) elNote.innerText = `saldo líquido previsto (modo diário) • ${horizon || pred.length} dia(s)`;
-  } else {
-    if (elInc) elInc.innerText = toMoney(income);
-    if (elExp) elExp.innerText = toMoney(expense);
-    if (elNote) elNote.innerText = `para ${horizon || pred.length} período(s)`;
-  }
-
+  // KPIs completos (agora preenche tudo)
+  if (elBal) elBal.innerText = toMoney(norm.kpis.net);
+  if (elInc) elInc.innerText = toMoney(norm.kpis.income);
+  if (elExp) elExp.innerText = toMoney(norm.kpis.expense);
+  if (elNote) elNote.innerText = `projeção no horizonte • ${horizon} dia(s)`;
   if (elCount) elCount.innerText = `${pred.length} itens`;
 
-  // ----------------------------
-  // Risco (heurística)
-  // ----------------------------
-  const computeRiskDaily = (rows) => {
-    const nets = rows.map(r => num(r?.net_pred));
-    const negDays = nets.filter(v => v < 0).length;
+  // Risk: score 0..10 + contagem de alertas
+  const alertCount = Array.isArray(norm.alerts) ? norm.alerts.length : 0;
+  const rLabel = riskLabel(norm.riskScore);
+  if (elRisk) elRisk.innerText = `${rLabel} (${Math.max(alertCount, asNumber(norm.riskScore))})`;
 
-    // Oscilação: conta dias com |net| muito acima da mediana de |net|
-    const absNets = nets.map(v => Math.abs(v)).filter(v => v > 0);
-    const median = (() => {
-      if (!absNets.length) return 0;
-      const s = [...absNets].sort((a, b) => a - b);
-      const m = Math.floor(s.length / 2);
-      return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-    })();
-    const swingThreshold = median > 0 ? 1.8 * median : 0;
-    const highSwingDays = swingThreshold > 0 ? absNets.filter(v => v >= swingThreshold).length : 0;
-
-    let level = "Baixo";
-    if (negDays >= 3 || highSwingDays >= 3) level = "Alto";
-    else if (negDays >= 1 || highSwingDays >= 1) level = "Médio";
-
-    return {
-      level,
-      count: negDays + highSwingDays,
-      negDays,
-      highExpDays: 0, // compatibilidade com UI (não faz sentido no modo net)
-      highSwingDays
-    };
-  };
-
-  const risk = isDaily ? computeRiskDaily(pred) : computeRiskFromPred(pred);
-  if (elRisk) elRisk.innerText = `${risk.level} (${risk.count})`;
-
-  // ----------------------------
-  // Alertas
-  // ----------------------------
+  // Alerts (do backend)
   const alertsBox = document.getElementById("pred-alerts");
   if (alertsBox) {
     const items = [];
 
-    if (risk.negDays > 0) {
-      items.push({
-        title: "Saldo previsto negativo",
-        text: `${risk.negDays} dia(s) com saldo líquido abaixo de zero no horizonte.`,
-        icon: "fa-triangle-exclamation",
-        cls: "bg-amber-50 border-amber-200 text-amber-900"
-      });
-    }
-
-    // No modo mensal, mantém pico de despesa. No diário, troca por oscilação.
-    if (!isDaily && risk.highExpDays > 0) {
-      items.push({
-        title: "Picos de despesa",
-        text: `${risk.highExpDays} dia(s) com despesa acima do padrão recente.`,
-        icon: "fa-fire",
-        cls: "bg-rose-50 border-rose-200 text-rose-900"
-      });
-    }
-
-    if (isDaily && risk.highSwingDays > 0) {
-      items.push({
-        title: "Oscilações fortes no saldo",
-        text: `${risk.highSwingDays} dia(s) com variação de saldo bem acima do padrão do próprio horizonte.`,
-        icon: "fa-wave-square",
-        cls: "bg-indigo-50 border-indigo-200 text-indigo-900"
-      });
-    }
-
-    if (items.length === 0) {
-      items.push({
-        title: "Sem alertas críticos",
-        text: "Nada crítico no horizonte. Continue monitorando.",
-        icon: "fa-circle-check",
-        cls: "bg-emerald-50 border-emerald-200 text-emerald-900"
-      });
+    if (Array.isArray(norm.alerts) && norm.alerts.length) {
+      for (const a of norm.alerts.slice(0, 8)) {
+        const ui = levelToUi(a?.level);
+        items.push({
+          title: ui.title,
+          text: String(a?.message || "").trim() || "Alerta",
+          icon: ui.icon,
+          cls: ui.cls
+        });
+      }
+    } else {
+      // fallback: alerta básico via sinal
+      if (norm.kpis.net < 0) {
+        items.push({
+          title: "Saldo negativo previsto",
+          text: "O saldo líquido previsto no horizonte está abaixo de zero.",
+          icon: "fa-triangle-exclamation",
+          cls: "bg-amber-50 border-amber-200 text-amber-900"
+        });
+      } else {
+        items.push({
+          title: "Sem alertas críticos",
+          text: "Nada crítico no horizonte. Use como planejamento, não como sentença.",
+          icon: "fa-circle-check",
+          cls: "bg-emerald-50 border-emerald-200 text-emerald-900"
+        });
+      }
     }
 
     alertsBox.innerHTML = items.map(a => `
@@ -1131,27 +1207,24 @@ function renderPredictionsUI(payload) {
     `).join("");
   }
 
-  // ----------------------------
-  // Ações
-  // ----------------------------
+  // Actions (objetivas, baseadas em risco + saldo)
   const actionsBox = document.getElementById("pred-actions");
   if (actionsBox) {
     const acts = [];
 
-    acts.push("Revise despesas recorrentes (assinaturas) e corte o que não usa.");
+    acts.push("Revise despesas recorrentes e corte o que não agrega valor (a tradição manda: pagar menos sempre funciona).");
 
-    if (risk.level !== "Baixo") {
-      acts.push("Defina um teto diário de gasto até o período estabilizar.");
-      acts.push("Se houver dias negativos previstos, antecipe recebíveis ou reprograme pagamentos.");
+    if (norm.kpis.net < 0) {
+      acts.push("Antecipe recebíveis ou reprograme pagamentos para evitar saldo negativo no horizonte.");
+      acts.push("Defina um teto diário de gasto até estabilizar.");
     }
 
-    if (isDaily) {
-      acts.push("Evite comprometer o saldo com compras parceladas no curto prazo (efeito bola de neve é antigo e conhecido).");
-      if (risk.highSwingDays > 0) acts.push("Planeje uma ‘semana de contenção’ para reduzir volatilidade do caixa.");
-    } else {
-      acts.push("Antecipe contas com vencimento no horizonte para evitar juros.");
-      acts.push("Se houver pico previsto, planeje uma ‘semana de contenção’.");
+    if (norm.riskScore >= 7 || alertCount >= 4) {
+      acts.push("Concentre compras em dias com maior probabilidade de receita e evite parcelamentos no curto prazo.");
+      acts.push("Se existir uma categoria dominante, trate como ‘ponto de vazamento’ e ataque primeiro.");
     }
+
+    if (!acts.length) acts.push("Mantenha o monitoramento; ajuste fino > improviso.");
 
     actionsBox.innerHTML = acts.map(t => `
       <div class="p-3 rounded-xl border border-slate-200 bg-slate-50 flex gap-3 items-start">
@@ -1161,101 +1234,131 @@ function renderPredictionsUI(payload) {
     `).join("");
   }
 
-  // ----------------------------
-  // Detalhamento
-  // ----------------------------
+  // Lista detalhada (com income/expense/net + intervalo quando existir)
   const list = document.getElementById("pred-list");
   if (list) {
     if (!pred.length) {
       list.innerHTML = `<div class="p-6 text-sm text-slate-400">Sem dados previstos.</div>`;
     } else {
-      const rows = [...pred].slice(0, 120); // limite visual
+      list.innerHTML = pred.slice(0, 120).map(r => {
+        const inc = asNumber(r.income);
+        const exp = asNumber(r.expense);
+        const net = asNumber(r.net);
 
-      list.innerHTML = rows.map(r => {
-        const rawDate = r?.date || r?.ym || "—";
+        const incHasRange = (asNumber(r.income_low) > 0 || asNumber(r.income_high) > 0);
+        const expHasRange = (asNumber(r.expense_low) > 0 || asNumber(r.expense_high) > 0);
 
-        const dtLabel = (/^\d{4}-\d{2}-\d{2}$/.test(rawDate))
-          ? new Date(rawDate + "T00:00:00").toLocaleDateString("pt-BR")
-          : rawDate;
-
-        if (isDaily) {
-          const netD = num(r?.net_pred);
-          return `
-            <div class="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
-              <div>
-                <div class="text-sm font-bold text-slate-800">${safeText(dtLabel)}</div>
-                <div class="text-xs text-slate-500">Saldo líquido previsto</div>
-              </div>
-              <div class="text-sm font-bold ${netD < 0 ? "text-rose-600" : "text-emerald-600"}">
-                ${netD < 0 ? "-" : "+"} ${toMoney(Math.abs(netD))}
-              </div>
-            </div>
-          `;
-        } else {
-          const incD = num(r?.income_pred ?? r?.income ?? 0);
-          const expD = num(r?.expense_pred ?? r?.expense ?? r?.expense_total ?? 0);
-          const netD = incD - expD;
-
-          return `
-            <div class="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
-              <div>
-                <div class="text-sm font-bold text-slate-800">${safeText(dtLabel)}</div>
-                <div class="text-xs text-slate-500">Receita: ${toMoney(incD)} • Despesa: ${toMoney(expD)}</div>
-              </div>
-              <div class="text-sm font-bold ${netD < 0 ? "text-rose-600" : "text-emerald-600"}">
-                ${netD < 0 ? "-" : "+"} ${toMoney(Math.abs(netD))}
-              </div>
-            </div>
-          `;
+        // categoria top do dia (se backend mandou expense_by_category)
+        let topCat = null;
+        const ebc = r.expense_by_category && typeof r.expense_by_category === "object" ? r.expense_by_category : null;
+        if (ebc) {
+          const entries = Object.entries(ebc).map(([k, v]) => [k, asNumber(v)]);
+          entries.sort((a, b) => b[1] - a[1]);
+          if (entries.length && entries[0][1] > 0) topCat = { name: String(entries[0][0]), value: entries[0][1] };
         }
+
+        return `
+          <div class="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
+            <div>
+              <div class="text-sm font-bold text-slate-800">${safeText(r.label)}</div>
+              <div class="text-xs text-slate-500 mt-1">
+                Receita: <b>${toMoney(inc)}</b>${incHasRange ? ` <span class="opacity-70">(≈ ${toMoney(r.income_low)}–${toMoney(r.income_high)})</span>` : ""}
+                • Despesa: <b>${toMoney(exp)}</b>${expHasRange ? ` <span class="opacity-70">(≈ ${toMoney(r.expense_low)}–${toMoney(r.expense_high)})</span>` : ""}
+                ${topCat ? ` • Provável: <span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-semibold">${safeText(topCat.name)}</span>` : ""}
+              </div>
+            </div>
+            <div class="text-right">
+              <div class="text-sm font-bold ${net < 0 ? "text-rose-600" : "text-emerald-600"}">
+                ${net < 0 ? "-" : "+"} ${toMoney(Math.abs(net))}
+              </div>
+            </div>
+          </div>
+        `;
       }).join("");
     }
   }
 }
 
-
 async function runPredictions() {
-  const btn = document.getElementById("btn-run-pred");
-  const prev = btn ? btn.innerHTML : "";
-
   try {
-    if (btn) { btn.innerHTML = "Gerando..."; setDisabled(btn, true); }
+    setPredLoading(true);
 
-    const horizon = Number(document.getElementById("pred-horizon")?.value || 30);
+    const horizon = Number(document.getElementById("pred-horizon")?.value || 7);
     const scope = String(document.getElementById("pred-scope")?.value || "all");
     const accId = scope === "account" ? Number(document.getElementById("pred-account")?.value || 0) : null;
 
-    // Endpoint preferencial: /forecast/daily?days=...
-    // (Se teu backend não tiver, você vai ver erro no toast — aí ajusta o endpoint)
     const qs = new URLSearchParams();
     qs.set("days", String(horizon));
     if (accId) qs.set("account_id", String(accId));
 
-    const payload = await api(`/forecast/daily?${qs.toString()}`, { method: "GET", timeoutMs: 60000 });
+    // treino pode demorar (scikit-learn)
+    const payload = await api(`/forecast/daily?${qs.toString()}`, { method: "GET", timeoutMs: 120000 });
 
     state.predictions.lastPayload = payload;
     state.predictions.lastRunAt = new Date();
 
-    const meta = `Modelo: ${(payload?.model || payload?.meta?.model || "—")} | Última execução: ${new Date().toLocaleString("pt-BR")}`;
-    setPredMeta(meta);
+    const norm = normalizeForecastDaily(payload);
+    const dt = new Date().toLocaleString("pt-BR");
+    const incomeAlgo = safeText(norm?.meta?.income_algo || "—");
+    const expenseAlgo = safeText(norm?.meta?.expense_algo || "—");
+    const basis = safeText(norm?.meta?.basis || norm.basis || "—");
+
+    setPredMeta(`Modelo: ${basis} | income=${incomeAlgo} • expense=${expenseAlgo} | Última execução: ${dt}`);
 
     renderPredictionsUI(payload);
+    renderPredictionsCharts(payload);
+
     showToast("Predições", "Previsão gerada com sucesso.");
   } catch (e) {
     console.error(e);
     showToast("Predições (erro)", e.message || String(e), 7000);
     setPredMeta(`Modelo: — | Última execução: erro`);
+
+    // limpa charts
+    destroyChart(state.charts.predFlow);
+    destroyChart(state.charts.predCats);
+    state.charts.predFlow = null;
+    state.charts.predCats = null;
+
+    // UI fallback
+    const elBal = document.getElementById("pred-balance");
+    const elInc = document.getElementById("pred-income");
+    const elExp = document.getElementById("pred-expense");
+    const elRisk = document.getElementById("pred-risk");
+    const elCount = document.getElementById("pred-count");
+    const elNote = document.getElementById("pred-balance-note");
+    if (elBal) elBal.innerText = "—";
+    if (elInc) elInc.innerText = "—";
+    if (elExp) elExp.innerText = "—";
+    if (elRisk) elRisk.innerText = "Indisponível";
+    if (elCount) elCount.innerText = "0 itens";
+    if (elNote) elNote.innerText = "erro ao gerar predição";
+
+    const alertsBox = document.getElementById("pred-alerts");
+    if (alertsBox) {
+      alertsBox.innerHTML = `
+        <div class="p-3 rounded-xl border bg-rose-50 border-rose-200 text-rose-900 flex gap-3 items-start">
+          <i class="fas fa-triangle-exclamation mt-0.5"></i>
+          <div>
+            <div class="font-bold text-sm">Predição não gerada</div>
+            <div class="text-xs opacity-80">${safeText(e.message || String(e))}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    const list = document.getElementById("pred-list");
+    if (list) list.innerHTML = `<div class="p-6 text-sm text-slate-400">Sem dados previstos.</div>`;
   } finally {
-    if (btn) { btn.innerHTML = prev || '<i class="fas fa-wand-magic-sparkles mr-2"></i> Gerar'; setDisabled(btn, false); }
+    setPredLoading(false);
   }
 }
-
-// expõe para onclick do HTML
 window.forecastLoadUI = runPredictions;
 
-// ==========================================================
-// CRUD: Accounts / Categories / Transactions
-// ==========================================================
+
+/* ==========================================================
+   CRUD: Accounts / Categories / Transactions
+   ========================================================== */
 async function deleteAccount(id) {
   if (!confirm("Excluir esta conta?")) return;
   await api(`/accounts/${id}`, { method: "DELETE" });
@@ -1305,9 +1408,9 @@ window.handleSaveCategory = async (e) => {
   await refreshAll();
 };
 
-// ==========================================================
-// CRUD: Cartões
-// ==========================================================
+/* ==========================================================
+   CRUD: Cartões
+   ========================================================== */
 async function deleteCard(id) {
   if (!confirm("Excluir este cartão e suas compras?")) return;
   await api(`/cards/${id}`, { method: "DELETE" });
@@ -1386,9 +1489,9 @@ window.handlePayInvoice = async (e) => {
   else alert("Operação concluída.");
 };
 
-// ==========================================================
-// FATURA
-// ==========================================================
+/* ==========================================================
+   FATURA
+   ========================================================== */
 window.selectCard = async (id) => {
   state.selectedCardId = Number(id);
   renderCreditCardsList();
@@ -1497,9 +1600,9 @@ async function deleteCardPurchase(id) {
 }
 window.deleteCardPurchase = deleteCardPurchase;
 
-// ==========================================================
-// RELATÓRIOS (mantive o essencial do teu fluxo)
-// ==========================================================
+/* ==========================================================
+   RELATÓRIOS
+   ========================================================== */
 function ymNow() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -1718,9 +1821,9 @@ window.printReport = async () => {
   setTimeout(() => w.print(), 350);
 };
 
-// ==========================================================
-// UX: ESC fecha modais
-// ==========================================================
+/* ==========================================================
+   UX: ESC fecha modais
+   ========================================================== */
 function closeIfOpen(id) {
   const el = document.getElementById(id);
   if (el && !el.classList.contains("hidden")) el.classList.add("hidden");
@@ -1732,9 +1835,9 @@ document.addEventListener("keydown", (e) => {
   ["modal-account","modal-category","modal-card","modal-card-purchase","modal-pay-invoice"].forEach(closeIfOpen);
 });
 
-// ==========================================================
-// Init
-// ==========================================================
+/* ==========================================================
+   Init
+   ========================================================== */
 document.addEventListener("DOMContentLoaded", () => {
   // datas default
   const txDate = document.getElementById("tx-date");
@@ -1881,7 +1984,10 @@ document.addEventListener("DOMContentLoaded", () => {
   // Inicialização visual
   setActiveNav("dashboard");
 
-  // Se a pessoa abrir via file://, avisa.
+  // Aplica estado inicial dos botões (receita/despesa)
+  window.setTxType(document.getElementById("tx-type")?.value || "expense");
+
+  // Se abrir via file://, avisa.
   if (location.protocol === "file:") {
     showToast("Atenção", "Você está abrindo via file://. Rode um servidor local (python -m http.server) para evitar CORS.", 8000);
   }

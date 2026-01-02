@@ -8,18 +8,11 @@
   <!-- Favicon (usa o logo do assets) -->
   <link rel="icon" type="image/png" href="./assets/logo%202.png" />
 
-  <!-- Bibliotecas Externas -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-
+  <!-- Tailwind config (PRECISA vir antes do CDN do Tailwind) -->
   <script>
-    pdfjsLib.GlobalWorkerOptions.workerSrc =
-      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-
-    tailwind.config = {
+    // Evita ReferenceError e garante que o CDN pegue a config
+    window.tailwind = window.tailwind || {};
+    window.tailwind.config = {
       theme: {
         extend: {
           colors: {
@@ -37,6 +30,21 @@
     };
   </script>
 
+  <!-- Bibliotecas Externas -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+
+  <!-- pdf.js worker -->
+  <script>
+    if (window.pdfjsLib) {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    }
+  </script>
+
   <style>
     body { background-color: #f1f5f9; }
     .hide-scrollbar::-webkit-scrollbar { display: none; }
@@ -47,12 +55,8 @@
     .slide-in { animation: slideIn 0.3s ease-out forwards; }
     @keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
 
-    /* Correção: botões do chat “transparentes” */
-    .chat-btn {
-      opacity: 1 !important;
-      background-opacity: 1 !important;
-      -webkit-text-fill-color: unset;
-    }
+    /* Correção: botões do chat (evita “transparência” por estilo externo) */
+    .chat-btn { opacity: 1 !important; }
   </style>
 </head>
 
@@ -77,7 +81,6 @@
         <i class="fas fa-chart-line w-5"></i> Dashboard
       </button>
 
-      <!-- NOVO: PREDIÇÕES -->
       <button onclick="switchView('predictions')" id="nav-predictions"
         class="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg text-slate-600 hover:bg-slate-50 transition-colors">
         <i class="fas fa-wand-magic-sparkles w-5"></i> Predições
@@ -125,7 +128,6 @@
       <i class="fas fa-robot text-xl text-yellow-400"></i>
     </button>
 
-    <!-- NOVO: PREDIÇÕES -->
     <button id="mnav-predictions" onclick="switchView('predictions')" class="flex flex-col items-center p-2 text-slate-400 hover:text-blue-600">
       <i class="fas fa-wand-magic-sparkles text-xl mb-1"></i>
       <span class="text-[10px] font-bold">Pred</span>
@@ -139,7 +141,7 @@
 
   <!-- Toast (erros/info) -->
   <div id="toast" class="fixed top-4 right-4 z-[90] hidden">
-    <div id="toast-inner" class="bg-slate-900 text-white px-4 py-3 rounded-xl shadow-2xl text-sm flex items-start gap-3 max-w-[340px]">
+    <div class="bg-slate-900 text-white px-4 py-3 rounded-xl shadow-2xl text-sm flex items-start gap-3 max-w-[340px]">
       <i class="fas fa-circle-exclamation mt-0.5 text-amber-300"></i>
       <div>
         <p class="font-bold" id="toast-title">Aviso</p>
@@ -312,7 +314,7 @@
       </div>
     </div>
 
-    <!-- VIEW: PREDICTIONS (NOVO) -->
+    <!-- VIEW: PREDICTIONS -->
     <div id="view-predictions" class="hidden p-4 md:p-8 pb-24 md:pb-8 max-w-7xl mx-auto space-y-8">
       <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
         <div>
@@ -325,8 +327,7 @@
         <div class="flex flex-col sm:flex-row gap-3 sm:items-center">
           <div class="flex gap-2 items-center">
             <span class="text-xs font-bold text-slate-500 uppercase">Horizonte</span>
-            <select id="pred-horizon"
-              class="p-2 bg-white border border-slate-200 rounded-lg text-sm outline-none">
+            <select id="pred-horizon" class="p-2 bg-white border border-slate-200 rounded-lg text-sm outline-none">
               <option value="7">7 dias</option>
               <option value="14">14 dias</option>
               <option value="30" selected>30 dias</option>
@@ -337,15 +338,13 @@
 
           <div class="flex gap-2 items-center">
             <span class="text-xs font-bold text-slate-500 uppercase">Base</span>
-            <select id="pred-scope"
-              class="p-2 bg-white border border-slate-200 rounded-lg text-sm outline-none">
+            <select id="pred-scope" class="p-2 bg-white border border-slate-200 rounded-lg text-sm outline-none">
               <option value="all" selected>Todas as contas</option>
               <option value="account">Conta específica</option>
             </select>
           </div>
 
-          <select id="pred-account"
-            class="hidden p-2 bg-white border border-slate-200 rounded-lg text-sm outline-none">
+          <select id="pred-account" class="hidden p-2 bg-white border border-slate-200 rounded-lg text-sm outline-none">
             <option value="">Carregando contas...</option>
           </select>
 
@@ -356,7 +355,6 @@
         </div>
       </div>
 
-      <!-- Aviso/Metadados -->
       <div class="bg-white border border-slate-200 rounded-2xl p-5">
         <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
           <div class="flex gap-3">
@@ -376,7 +374,6 @@
         </div>
       </div>
 
-      <!-- KPIs -->
       <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div class="bg-white border border-slate-200 rounded-2xl p-4">
           <p class="text-[11px] text-slate-500 font-bold uppercase">Saldo projetado</p>
@@ -403,7 +400,6 @@
         </div>
       </div>
 
-      <!-- Gráficos -->
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div class="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
           <div class="p-4 border-b border-slate-100 flex items-center justify-between">
@@ -431,7 +427,6 @@
         </div>
       </div>
 
-      <!-- Recomendações / Alertas -->
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
           <div class="p-4 border-b border-slate-100">
@@ -458,7 +453,6 @@
         </div>
       </div>
 
-      <!-- Detalhamento -->
       <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div class="p-4 border-b border-slate-100 flex items-center justify-between">
           <div>
@@ -474,7 +468,6 @@
         </div>
       </div>
 
-      <!-- Integração opcional com o chat -->
       <div class="bg-white border border-slate-200 rounded-2xl p-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div class="flex items-start gap-3">
           <div class="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center">
@@ -642,8 +635,7 @@
         <div class="flex flex-col sm:flex-row gap-3 sm:items-center">
           <div class="flex gap-2 items-center">
             <span class="text-xs font-bold text-slate-500 uppercase">Competência</span>
-            <input id="report-ym" type="month"
-              class="p-2 bg-white border border-slate-200 rounded-lg text-sm outline-none" />
+            <input id="report-ym" type="month" class="p-2 bg-white border border-slate-200 rounded-lg text-sm outline-none" />
           </div>
 
           <button onclick="generateAndRenderReport()"
@@ -739,7 +731,7 @@
           </div>
         </div>
         <button onclick="toggleAIModal()"
-          class="chat-btn opacity-100 bg-opacity-100 w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 flex items-center justify-center transition-colors">
+          class="chat-btn w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 flex items-center justify-center transition-colors">
           <i class="fas fa-times text-white"></i>
         </button>
       </div>
@@ -759,7 +751,7 @@
             class="flex-1 bg-slate-100 border border-slate-300 text-slate-800 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium"
             placeholder="Faça uma pergunta sobre suas finanças..." autocomplete="off" />
           <button type="submit"
-            class="chat-btn opacity-100 bg-opacity-100 bg-blue-600 hover:bg-blue-700 text-white w-12 rounded-xl flex items-center justify-center shadow-lg transition-colors active:scale-95 focus:ring-2 focus:ring-blue-300">
+            class="chat-btn bg-blue-600 hover:bg-blue-700 text-white w-12 rounded-xl flex items-center justify-center shadow-lg transition-colors active:scale-95 focus:ring-2 focus:ring-blue-300">
             <i class="fas fa-paper-plane text-white"></i>
           </button>
         </form>
@@ -984,26 +976,7 @@
     </div>
   </div>
 
-  <script src="./app.js" defer></script>
-
-  <!--
-    NOTAS IMPORTANTES (para o app.js):
-    1) Você precisa implementar no app.js:
-       - switchView('predictions') adicionando:
-         * destaque do menu desktop: nav-predictions
-         * destaque do menu mobile: mnav-predictions
-         * alternância de visibilidade: view-predictions
-       - runPredictions(): preencher:
-         * pred-meta, pred-balance, pred-income, pred-expense, pred-risk, pred-count
-         * pred-alerts, pred-actions, pred-list
-         * chart-pred-flow, chart-pred-categories (Chart.js)
-       - carregar contas em pred-account e alternar exibição quando pred-scope == 'account'
-
-    2) IDs adicionados nesta tela (Predições):
-       pred-horizon, pred-scope, pred-account, btn-run-pred
-       pred-meta, pred-balance, pred-balance-note, pred-income, pred-expense, pred-risk
-       chart-pred-flow, chart-pred-categories
-       pred-alerts, pred-actions, pred-list, pred-count
-  -->
+  <!-- SEUS JS FICAM EM /js -->
+  <script src="./js/app.js" defer></script>
 </body>
 </html>
