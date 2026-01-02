@@ -1,32 +1,30 @@
-backend/.env
-backend/data/*.db
-backend/data/*.db-journal
-backend/__pycache__/
-backend/.venv/
-
-FinanceAI/.gitignore
-FinanceAI/*
-
 # Python
-.venv/
 __pycache__/
-*.pyc
-
-# Env
-backend/.env
-.env
-
-# DB
-backend/data/*.db
-backend/data/*.db-*
-.env
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
 .venv/
-__pycache__/
+venv/
+
+# Ambiente/segredos
+.env
+.env.*
+*.key
+*.pem
+*.p12
+
+# SQLite (NÃO subir banco local)
 *.db
-*.db-*
-data/*.db
-data/*.db-*
 *.sqlite
-*.sqlite-*
+*.sqlite3
+backend/data/
+backend/*.db
 
-FinanceAI/
+# Logs e runtime
+*.log
+logs/
+.tmp/
+cache/
